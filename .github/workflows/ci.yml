@@ -38,6 +38,9 @@ jobs:
 
   core:
     name: Core ${{ matrix.platform }}
+    permissions:
+      contents: read
+      pull-requests: read
     strategy:
       fail-fast: false
       matrix:
@@ -63,6 +66,72 @@ jobs:
         run: cargo test --workspace --locked
       - name: Build
         run: cargo build --workspace --locked
+      - name: Detect toolchain integration changes
+        id: toolchain-changes
+        uses: dorny/paths-filter@v4
+        with:
+          # Pushes compare with event.before; PRs use the changed-files API.
+          base: ${{ github.event_name == 'push' && github.ref || '' }}
+          filters: |
+            integration:
+              - 'crates/codelearn-tool-core/src/**'
+              - 'crates/codelearn-tool-core/tests/**'
+              - 'crates/codelearn-tool-core/Cargo.toml'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/workflows/ci.yml'
+      - name: Prepare UCRT64 GCC and GDB
+        if: runner.os == 'Windows' && steps.toolchain-changes.outputs.integration == 'true'
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-gdb
+      - name: Test with real GCC and GDB (Windows MSVC)
+        if: runner.os == 'Windows' && steps.toolchain-changes.outputs.integration == 'true'
+        shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+          RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-msvc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $toolchainBin = Join-Path $env:MSYS2_LOCATION 'ucrt64/bin'
+          $env:CODELEARN_TEST_GCC = (Get-Item -LiteralPath (Join-Path $toolchainBin 'gcc.exe')).FullName
+          $env:CODELEARN_TEST_GDB = (Get-Item -LiteralPath (Join-Path $toolchainBin 'gdb.exe')).FullName
+          # Keep UCRT64 runtime DLLs and compiler subprocesses on this step's PATH.
+          $env:PATH = "$toolchainBin;$env:PATH"
+          $env:CODELEARN_TEST_REQUIRE_PATH = '1'
+          foreach ($tool in @($env:CODELEARN_TEST_GCC, $env:CODELEARN_TEST_GDB)) {
+            Write-Output "Tool: $tool"
+            & $tool --version
+            if ($LASTEXITCODE -ne 0) { throw "Version check failed: $tool" }
+          }
+          cargo test --workspace --locked --test build -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test with real GCC and GDB (Linux)
+        if: runner.os == 'Linux' && steps.toolchain-changes.outputs.integration == 'true'
+        shell: bash
+        run: |
+          missing=()
+          command -v gcc >/dev/null || missing+=(gcc)
+          command -v gdb >/dev/null || missing+=(gdb)
+          if (( ${#missing[@]} )); then
+            sudo apt-get update
+            sudo apt-get install --no-install-recommends -y "${missing[@]}"
+          fi
+          CODELEARN_TEST_GCC=$(readlink -f "$(command -v gcc)")
+          CODELEARN_TEST_GDB=$(readlink -f "$(command -v gdb)")
+          test -x "$CODELEARN_TEST_GCC"
+          test -x "$CODELEARN_TEST_GDB"
+          export CODELEARN_TEST_GCC CODELEARN_TEST_GDB
+          export CODELEARN_TEST_REQUIRE_PATH=1
+          printf 'GCC: %s\nGDB: %s\n' "$CODELEARN_TEST_GCC" "$CODELEARN_TEST_GDB"
+          "$CODELEARN_TEST_GCC" --version
+          "$CODELEARN_TEST_GDB" --version
+          cargo test --workspace --locked --test build -- --ignored --nocapture
 
   tauri:
     name: Tauri ${{ matrix.platform }}
