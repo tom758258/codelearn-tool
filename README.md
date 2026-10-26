@@ -6,13 +6,25 @@ A Windows and Linux desktop application for learning programming, starting with 
 
 ## Current scope / 目前範圍
 
-The application currently displays a minimal welcome window. It uses an independent Rust Core library and a Tauri 2 desktop shell with React, TypeScript, and Vite. Core has no business APIs or UI dependencies yet.
+The desktop currently displays a minimal welcome window. Its independent Rust Core library now provides GCC/GDB discovery and validation, plus C11 compile/link APIs. The Tauri 2 desktop shell uses React, TypeScript, and Vite; these Core features are not connected to the UI yet.
 
-目前應用程式僅顯示最小歡迎視窗，採用獨立 Rust Core Library，以及 Tauri 2、React、TypeScript、Vite 桌面架構。Core 尚無業務 API，也不依賴 UI。
+目前桌面程式仍僅顯示最小歡迎視窗。獨立 Rust Core Library 已提供 GCC/GDB 偵測與驗證，以及 C11 編譯／連結 API。桌面外殼採用 Tauri 2、React、TypeScript、Vite；這些 Core 功能尚未串接至 UI。
 
-C editing, GCC/GDB discovery or installation, compile/run/debug, lessons, and learning progress are **not implemented**. No telemetry, cloud services, or student-data persistence is included.
+C editing, toolchain installation, program execution/debugging, lessons, and learning progress are **not implemented**. No telemetry, cloud services, or student-data persistence is included.
 
-C 程式編輯、GCC/GDB 偵測或安裝、編譯／執行／除錯、課程及學習進度均**尚未實作**。目前不包含遙測、雲端服務或學生資料儲存。
+C 程式編輯、工具鏈安裝、程式執行／除錯、課程及學習進度均**尚未實作**。目前不包含遙測、雲端服務或學生資料儲存。
+
+Core callers explicitly select an absolute GCC executable path and provide existing, separate Workspace and CodeLearnTemp directories. Selected `.c` files, logical source directories, and include directories must resolve inside the Workspace. Text input is compiled from a private snapshot and may link additional selected `.c` files. GCC is validated by a real compile/link; GDB is checked independently for version/startup only. Discovery suggests usable candidates in explicit-path, PATH, then common-location order and never selects one automatically.
+
+Core 呼叫端須明確選定 GCC 執行檔的絕對路徑，並提供已存在、互不包含的 Workspace 與 CodeLearnTemp 目錄。選定的 `.c`、邏輯來源目錄與 Include 目錄，解析後必須位於 Workspace 內。文字來源會建立私有快照，亦可連結其他明確選定的 `.c`。GCC 以真實編譯／連結驗證；GDB 僅獨立檢查版本與可啟動性。候選建議順序先列可用工具，再依手動路徑、PATH、常見位置排序，不自動選定。
+
+Each build uses C11 with `-Wall -Wextra -g -O0 -fdiagnostics-color=never`, preserves raw output and source paths, and has a configurable timeout (60 seconds by default). Only success returns a `BuildArtifact`; clones retain its executable and snapshot until the final drop. Keep a clone of `BuildResult.cleanup` to inspect directory cleanup errors after release. Core deletes only its own build subdirectory. Crashes may leave files; no startup scavenging or build cache is provided.
+
+每次建置使用 C11 與 `-Wall -Wextra -g -O0 -fdiagnostics-color=never`，保留原始輸出與來源路徑，並提供可配置的逾時（預設 60 秒）。成功時才回傳 `BuildArtifact`；複製的引用會保留執行檔與快照，直到最後一份釋放。若要在釋放後檢查目錄清理錯誤，須保留 `BuildResult.cleanup` 的複本。Core 只刪除自己建立的建置子目錄。異常崩潰可能留下檔案；不提供啟動掃描清理或建置快取。
+
+Compiler supervision uses Windows Job Objects or Linux process groups, including descendant cleanup on timeout and normal compiler exit. Output is captured in private files to avoid pipe deadlocks. GCC inherits the process environment and manages its own intermediate-file locations. Supervision and canonical path checks are not an OS sandbox and do not contain processes that deliberately escape their managed group, or all indirect header/library access.
+
+編譯程序透過 Windows Job Object 或 Linux Process Group 管理，在逾時與編譯器正常退出時清理受控衍生程序。輸出擷取至私有檔案以避免管線死鎖。GCC 繼承程序環境，並自行管理中間檔位置。程序管理與實際路徑核對不是作業系統沙箱，無法涵蓋刻意逃離管理群組的程序或所有間接 Header／Library 存取。
 
 ## Repository / 專案結構
 
@@ -39,8 +51,8 @@ Use Node.js **24**, npm, and stable Rust with rustfmt and Clippy. Target Windows
 
 - **Windows:** MSVC Rust toolchain, Visual Studio C++ Build Tools with the Windows SDK, and Microsoft Edge WebView2 Runtime.
 - **Windows：** MSVC Rust 工具鏈、包含 Windows SDK 的 Visual Studio C++ Build Tools，以及 Microsoft Edge WebView2 Runtime。
-- **Linux:** Ubuntu 24.04 x64 is the packaging baseline. Install the development packages below; these build the desktop shell and do not provide application-level GCC/GDB integration.
-- **Linux：** 封裝基準為 Ubuntu 24.04 x64。請安裝下列開發套件；這些套件供桌面程式建置使用，不代表應用程式已具備 GCC/GDB 整合。
+- **Linux:** Ubuntu 24.04 x64 is the packaging baseline. Install the development packages below to build the desktop shell. Core compilation features require a separately available GCC; the desktop does not install toolchains.
+- **Linux：** 封裝基準為 Ubuntu 24.04 x64。請安裝下列開發套件以建置桌面程式。Core 編譯功能需另有可用的 GCC；桌面程式不安裝工具鏈。
 
 ```sh
 sudo apt-get update
@@ -83,9 +95,13 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 cargo build --locked --manifest-path src-tauri/Cargo.toml
 ```
 
-Build the frontend before direct Cargo checks of Tauri. No frontend test suite is currently defined; the Rust test commands currently discover no tests because no business logic is implemented.
+Build the frontend before direct Cargo checks of Tauri. No frontend test suite is currently defined. Default Core tests cover path boundaries, artifact cleanup errors (Windows), and compiler process supervision without requiring GCC/GDB. The Windows path-alias test creates temporary junctions and requires an environment permitting that operation.
 
-直接執行 Tauri 的 Cargo 檢查前，請先建置前端。目前未建立前端測試套件；由於尚無業務邏輯，Rust 測試指令目前不會找到測試案例。
+直接執行 Tauri 的 Cargo 檢查前，請先建置前端。目前未建立前端測試套件。Core 預設測試涵蓋路徑邊界、產物清理錯誤（Windows）及編譯程序管理，不需要 GCC/GDB。Windows 路徑別名測試會建立暫存 Junction，執行環境須允許此操作。
+
+Real GCC checks are opt-in: set `CODELEARN_TEST_GCC` to an existing absolute GCC path, then run `cargo test --workspace --locked --test build -- --ignored --nocapture`. Optionally set `CODELEARN_TEST_GDB` to check a real GDB, and `CODELEARN_TEST_REQUIRE_PATH=1` to require the selected GCC to also be discovered through the current PATH. These checks compile synthetic sources without executing the resulting programs. Tools are never installed automatically.
+
+真實 GCC 檢查須明確啟用：將 `CODELEARN_TEST_GCC` 設為既有 GCC 的絕對路徑，再執行 `cargo test --workspace --locked --test build -- --ignored --nocapture`。可選擇設定 `CODELEARN_TEST_GDB` 以檢查真實 GDB；設定 `CODELEARN_TEST_REQUIRE_PATH=1` 則要求選定的 GCC 亦可從目前 PATH 偵測到。這些檢查只編譯合成來源，不執行產出的程式，也不會自動安裝工具。
 
 ## Desktop builds / 桌面建置
 
