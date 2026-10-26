@@ -1,0 +1,79 @@
+# Rust / Cargo (both root Core and independent Tauri Cargo package)
+target/
+*.rs.bk
+
+# Node / Vite / Frontend
+node_modules/
+.vite/
+coverage/
+
+# Environment / local configuration
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.local
+
+# IDE / editor / OS temporary files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Logs, crash dumps, and debugging state
+*.log
+*.dmp
+*.mdmp
+*.core
+core.*
+.gdb_history
+logs/
+crash-dumps/
+debug-output/
+
+# Generated executables, libraries, and native C build products
+*.exe
+*.dll
+*.so
+*.dylib
+*.o
+*.obj
+*.a
+*.lib
+*.pdb
+*.ilk
+*.out
+*.AppImage
+*.msi
+*.deb
+
+# Generated build/distribution and test evidence
+dist/
+build/
+release/
+artifacts/
+reports/
+captures/
+test-results/
+.tmp_tests/
+.tmp_build/
+
+# Private local workspaces and student exercises (never publish by default)
+.local/
+local-data/
+local-workspaces/
+student-workspaces/
+user-workspaces/
+scratch/
+
+# Personal notes
+.obsidian/
+Local/
+
+# Intentionally NOT blanket-ignored:
+# data/, examples/, lessons/, tests/, *.c, *.h, *.csv, *.jsonl
+# These may contain legitimate tracked teaching material or synthetic fixtures.
+# gitignore is not a privacy review: inspect staged changes before any commit.
