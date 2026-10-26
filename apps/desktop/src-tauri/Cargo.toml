@@ -1,0 +1,13 @@
+[package]
+name = "codelearn-tool-desktop"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2.6", features = [] }
+
+[dependencies]
+codelearn-tool-core = { path = "../../../crates/codelearn-tool-core" }
+tauri = { version = "2.11", features = [] }

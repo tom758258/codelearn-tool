@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "CodeLearn Tool",
+  "mainBinaryName": "CodeLearn Tool",
+  "version": "0.1.0",
+  "identifier": "io.github.tom758258.codelearn-tool",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "CodeLearn Tool",
+        "width": 800,
+        "height": 560,
+        "minWidth": 360,
+        "minHeight": 360,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self'; img-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["appimage"],
+    "icon": ["icons/codelearn-icon.png", "icons/codelearn-icon.ico"]
+  }
+}

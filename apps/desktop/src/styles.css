@@ -1,0 +1,45 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color: #213047;
+  background: #f4f6f8;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+main {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 40px 24px;
+  text-align: center;
+}
+
+.mark {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+}
+
+h1 {
+  margin: 24px 0 8px;
+  font-size: 32px;
+}
+
+p {
+  margin: 8px 0;
+  line-height: 1.6;
+  max-width: 440px;
+}
+
+.status {
+  color: #526174;
+  font-size: 14px;
+}

@@ -1,0 +1,104 @@
+name: Build Desktop
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Desktop platform
+        required: true
+        default: Both
+        type: choice
+        options:
+          - Windows
+          - Linux
+          - Both
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Build Windows EXE
+    if: inputs.platform == 'Windows' || inputs.platform == 'Both'
+    runs-on: windows-2025
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install stable Rust (Windows x64 MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+      - name: Build release EXE without installer
+        working-directory: apps/desktop
+        run: npm run tauri -- build --no-bundle -- --locked
+      - name: Verify EXE and record short commit SHA
+        id: artifact
+        shell: pwsh
+        run: |
+          $exe = Get-Item -LiteralPath 'apps/desktop/src-tauri/target/release/CodeLearn Tool.exe' -ErrorAction Stop
+          if ($exe.PSIsContainer -or $exe.Length -le 0) {
+            throw 'Expected a non-empty Windows EXE'
+          }
+          $shortSha = (git rev-parse --short=7 HEAD).Trim()
+          "short_sha=$shortSha" >> $env:GITHUB_OUTPUT
+      - name: Upload Windows EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: codelearn-tool-windows-x64-${{ steps.artifact.outputs.short_sha }}
+          path: apps/desktop/src-tauri/target/release/CodeLearn Tool.exe
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  linux:
+    name: Build Linux AppImage
+    if: inputs.platform == 'Linux' || inputs.platform == 'Both'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libfuse2t64
+      - name: Install stable Rust (Linux x64)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+      - name: Build release AppImage
+        working-directory: apps/desktop
+        run: npm run tauri -- build --bundles appimage -- --locked
+      - name: Verify AppImage and record short commit SHA
+        id: artifact
+        shell: bash
+        run: |
+          shopt -s nullglob
+          images=(apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage)
+          if [ "${#images[@]}" -ne 1 ] || [ ! -s "${images[0]}" ]; then
+            echo 'Expected exactly one non-empty AppImage' >&2
+            exit 1
+          fi
+          echo "path=${images[0]}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Upload Linux AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: codelearn-tool-linux-x64-${{ steps.artifact.outputs.short_sha }}
+          path: ${{ steps.artifact.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
