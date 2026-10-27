@@ -186,173 +186,23 @@ fn inactive(pid: u32) -> bool {
 #[ignore = "requires explicitly selected real GCC and GDB"]
 fn real_debug_operations_frames_and_pause() {
     let f = Fixture::new();
-    let redact = |message: String| {
-        let mut message = message;
-        for (path, label) in [
-            (f._root.path().to_owned(), "<fixture>"),
-            (
-                std::env::var_os("CODELEARN_TEST_GDB").unwrap().into(),
-                "<gdb>",
-            ),
-            (
-                std::env::var_os("CODELEARN_TEST_GCC").unwrap().into(),
-                "<gcc>",
-            ),
-        ] {
-            let path = path.to_string_lossy();
-            for spelling in [
-                path.to_string(),
-                path.replace('\\', "/"),
-                path.replace('\\', "\\\\"),
-            ] {
-                message = message.replace(&spelling, label);
-            }
-        }
-        message
-    };
-    let report_event = |event: &DebugEvent| match event {
-        DebugEvent::Running => eprintln!("diagnostic event: Running"),
-        DebugEvent::Stopped {
-            reason,
-            signal,
-            breakpoint,
-            ..
-        } => eprintln!(
-            "diagnostic event: Stopped reason={reason:?} signal={signal:?} breakpoint={breakpoint:?}"
-        ),
-        DebugEvent::Output { stream, bytes } => eprintln!(
-            "diagnostic event: Output stream={stream:?} length={}",
-            bytes.len()
-        ),
-        DebugEvent::Exited { exit_code, signal } => {
-            eprintln!("diagnostic event: Exited exit_code={exit_code:?} signal={signal:?}")
-        }
-        DebugEvent::DebuggerError(error) => {
-            eprintln!("diagnostic event: DebuggerError {}", redact(error.clone()))
-        }
-        DebugEvent::Finished { outcome } => {
-            eprintln!("diagnostic event: Finished outcome={outcome:?}")
-        }
-    };
-    eprintln!("diagnostic Start: before (no session)");
-    let started = debug::start(f.request("flow"));
-    eprintln!(
-        "diagnostic Start: result={}",
-        redact(format!("{:?}", started.as_ref().map(|_| ())))
-    );
-    let mut session = started.unwrap();
-    let events = session.take_events().unwrap();
-    eprintln!("diagnostic Start: after state={:?}", session.state());
-    let (reason, frame) = loop {
-        let next = event(&events);
-        report_event(&next);
-        match next {
-            DebugEvent::Stopped { reason, frame, .. } => {
-                break (reason, frame.expect("source frame"));
-            }
-            DebugEvent::Running => {}
-            other => panic!("expected stop, received {}", redact(format!("{other:?}"))),
-        }
-    };
-    assert_eq!(reason, StopReason::MainEntry);
-    assert_eq!(frame.function.as_deref(), Some("main"));
-    assert_eq!(
-        fs::canonicalize(frame.file.unwrap()).unwrap(),
-        fs::canonicalize(&f.source).unwrap()
-    );
-    assert!(frame.line.is_some());
-    eprintln!("diagnostic MainEntry: state={:?}", session.state());
-    let mut queued = std::collections::VecDeque::new();
-    macro_rules! observed {
-        ($label:literal, $operation:expr) => {{
-            eprintln!("diagnostic {}: before state={:?}", $label, session.state());
-            let result = $operation;
-            eprintln!(
-                "diagnostic {}: result={} after state={:?}",
-                $label,
-                redact(format!("{result:?}")),
-                session.state()
-            );
-            let mut count = 0;
-            for next in events.try_iter().take(128) {
-                report_event(&next);
-                queued.push_back(next);
-                count += 1;
-            }
-            eprintln!("diagnostic {}: newly observed events={count}", $label);
-            result
-        }};
-    }
-    let breakpoint = observed!(
-        "Breakpoint",
-        session.set_breakpoint(&f.source, line("inner-entry"))
-    )
-    .unwrap();
+    let (session, events) = f.start("flow");
+    let breakpoint = session
+        .set_breakpoint(&f.source, line("inner-entry"))
+        .unwrap();
     assert_eq!(
         fs::canonicalize(breakpoint.file.as_ref().unwrap()).unwrap(),
         fs::canonicalize(&f.source).unwrap()
     );
     assert_eq!(breakpoint.line, Some(line("inner-entry")));
-    assert!(observed!("Line 0", session.set_breakpoint(&f.source, 0)).is_err());
-    assert!(observed!("Line 99999", session.set_breakpoint(&f.source, 99999)).is_err());
-    let continued = observed!("Continue", session.continue_execution());
-    if continued.is_err() {
-        let began = Instant::now();
-        let mut disconnected = false;
-        while session.state() != DebugState::Finished && began.elapsed() < Duration::from_secs(7) {
-            match events.recv_timeout(Duration::from_millis(25)) {
-                Ok(next) => report_event(&next),
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    disconnected = true;
-                    break;
-                }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            }
-        }
-        for next in events.try_iter().take(128) {
-            report_event(&next);
-        }
-        eprintln!("diagnostic terminal state={:?}", session.state());
-        if session.state() == DebugState::Finished || disconnected {
-            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-            thread::spawn(move || {
-                let _ = sender.send(session.wait());
-            });
-            match receiver.recv_timeout(Duration::from_secs(1)) {
-                Ok(result) => eprintln!(
-                    "diagnostic DebugResult: outcome={:?} exit_code={:?} process_errors={} cleanup_errors={}",
-                    result.outcome,
-                    result.exit_code,
-                    redact(format!("{:?}", result.process_errors)),
-                    redact(format!("{:?}", result.cleanup_errors))
-                ),
-                Err(error) => eprintln!("diagnostic DebugResult unavailable: {error}"),
-            }
-        } else {
-            eprintln!(
-                "diagnostic DebugResult not collected: session has not finished within 7 seconds"
-            );
-        }
-        for next in events.try_iter().take(128) {
-            report_event(&next);
-        }
-        panic!(
-            "first Continue failed: {}; see diagnostics above",
-            redact(format!("{continued:?}"))
-        );
-    }
-    continued.unwrap();
-    // Replay observations so diagnostics do not consume events needed below.
-    let (reason, frame) = loop {
-        let next = queued.pop_front().unwrap_or_else(|| event(&events));
-        match next {
-            DebugEvent::Stopped { reason, frame, .. } => {
-                break (reason, frame.expect("source frame"));
-            }
-            DebugEvent::Running => {}
-            other => panic!("expected stop, received {}", redact(format!("{other:?}"))),
-        }
-    };
+    assert!(session.set_breakpoint(&f.source, 0).is_err());
+    assert!(matches!(
+        session.set_breakpoint(&f.source, 99999),
+        Err(DebugCommandError::Gdb(_))
+    ));
+    assert_eq!(session.state(), DebugState::Stopped);
+    session.continue_execution().unwrap();
+    let (reason, frame) = stopped(&events);
     assert_eq!(reason, StopReason::Breakpoint);
     assert_eq!(frame.function.as_deref(), Some("inner"));
     assert_eq!(
