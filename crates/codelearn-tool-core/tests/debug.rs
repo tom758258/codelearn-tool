@@ -256,7 +256,20 @@ fn real_debug_operations_frames_and_pause() {
         Err(DebugCommandError::InvalidState(DebugState::Running))
     );
     session.pause().unwrap();
-    assert_eq!(stopped(&events).0, StopReason::Pause);
+    let (reason, frame, signal) = loop {
+        match event(&events) {
+            DebugEvent::Stopped {
+                reason,
+                frame,
+                signal,
+                ..
+            } => break (reason, frame, signal),
+            DebugEvent::Running => {}
+            other => panic!("expected stop, received {other:?}"),
+        }
+    };
+    assert_eq!(reason, StopReason::Pause, "Pause signal={signal:?}");
+    frame.expect("source frame");
     session.continue_execution().unwrap();
     session.stop_handle().stop();
     finished(&events);

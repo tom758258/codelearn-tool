@@ -788,7 +788,8 @@ impl Engine {
                 "signal-received"
                     if self.pause_requested
                         && (signal.as_deref() == Some("SIGINT")
-                            || (cfg!(windows) && signal.as_deref() == Some("SIGTRAP"))) =>
+                            || (cfg!(windows)
+                                && matches!(signal.as_deref(), Some("SIGTRAP" | "0")))) =>
                 {
                     StopReason::Pause
                 }
@@ -1298,4 +1299,62 @@ fn supervise(
         artifact: request.artifact,
     };
     let _ = result_sender.send(result);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pause_signal_classification() {
+        let windows_pause = if cfg!(windows) {
+            StopReason::Pause
+        } else {
+            StopReason::Signal
+        };
+        for (pause_requested, reason, signal, expected) in [
+            (true, "signal-received", "SIGINT", StopReason::Pause),
+            (true, "signal-received", "SIGTRAP", windows_pause),
+            (true, "signal-received", "0", windows_pause),
+            (false, "signal-received", "0", StopReason::Signal),
+            (false, "signal-received", "SIGINT", StopReason::Signal),
+            (false, "signal-received", "SIGTRAP", StopReason::Signal),
+            (true, "signal-received", "SIGSEGV", StopReason::Signal),
+            (true, "signal-received", "UNKNOWN", StopReason::Signal),
+            (true, "breakpoint-hit", "0", StopReason::Breakpoint),
+            (true, "end-stepping-range", "0", StopReason::Step),
+        ] {
+            let (_, commands) = mpsc::sync_channel(1);
+            let (events, received) = mpsc::sync_channel(1);
+            let mut engine = Engine::new(Control {
+                stop: DebugStopHandle(Arc::default()),
+                state: Arc::new(Mutex::new(DebugState::Starting)),
+                commands,
+                events,
+            });
+            engine.state(DebugState::Running);
+            engine.pause_requested = pause_requested;
+            engine.record(
+                mi::parse(
+                    format!(r#"*stopped,reason="{reason}",signal-name="{signal}""#).as_bytes(),
+                )
+                .unwrap(),
+            );
+            let DebugEvent::Stopped {
+                reason,
+                signal: observed,
+                ..
+            } = received.try_recv().unwrap()
+            else {
+                panic!("expected stop");
+            };
+            assert_eq!(
+                reason, expected,
+                "pause_requested={pause_requested}, signal={signal}"
+            );
+            assert_eq!(observed.as_deref(), Some(signal));
+            assert_eq!(engine.state, DebugState::Stopped);
+            assert!(!engine.pause_requested);
+        }
+    }
 }
