@@ -86,19 +86,77 @@ pub(super) enum Record {
     },
 }
 
-fn invalid() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, "invalid GDB/MI record")
+fn invalid(bytes: &[u8], at: usize, stage: &str) -> io::Error {
+    let header = &bytes[..bytes.len().min(64)];
+    let token_end = header.iter().take_while(|b| b.is_ascii_digit()).count();
+    let token = match header[..token_end] {
+        [] => "none".into(),
+        _ => std::str::from_utf8(&header[..token_end])
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .map_or_else(|| "invalid".into(), |n| n.to_string()),
+    };
+    let kind = match header.get(token_end) {
+        Some(b'^') => "result(^)",
+        Some(b'*') => "exec-async(*)",
+        Some(b'+') => "status-async(+)",
+        Some(b'=') => "notify-async(=)",
+        Some(b'~') => "console-stream(~)",
+        Some(b'@') => "target-stream(@)",
+        Some(b'&') => "log-stream(&)",
+        _ => "unknown",
+    };
+    let class = header
+        .get(token_end.saturating_add(1)..)
+        .unwrap_or_default()
+        .split(|b| *b == b',')
+        .next()
+        .unwrap_or_default();
+    let class = match (header.get(token_end), class) {
+        (Some(b'^'), b"done") => "done",
+        (Some(b'^'), b"error") => "error",
+        (Some(b'^'), b"running") => "running",
+        (Some(b'^'), b"exit") => "exit",
+        (Some(b'*'), b"running") => "running",
+        (Some(b'*'), b"stopped") => "stopped",
+        (Some(b'='), b"thread-group-exited") => "thread-group-exited",
+        _ => "other/redacted",
+    };
+    let start = at.saturating_sub(12).min(bytes.len());
+    let end = at.saturating_add(12).min(bytes.len());
+    // Preserve syntax only: never include names, paths, values, or raw text.
+    let shape: String = bytes[start..end]
+        .iter()
+        .map(|b| match b {
+            b'"' | b'\\' | b',' | b'=' | b'{' | b'}' | b'[' | b']' => *b as char,
+            b'0'..=b'9' => 'D',
+            b'a'..=b'z' | b'A'..=b'Z' => 'A',
+            0..=31 | 127 => 'C',
+            128..=255 => 'U',
+            _ => '.',
+        })
+        .collect();
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!(
+            "invalid GDB/MI record: len={} kind={kind} class={class} token={token} cursor={at} stage={stage} shape[{start}..{end}]={shape:?}",
+            bytes.len()
+        ),
+    )
 }
 struct Parser<'a> {
     bytes: &'a [u8],
     at: usize,
 }
 impl Parser<'_> {
+    fn invalid(&self, stage: &str) -> io::Error {
+        invalid(self.bytes, self.at, stage)
+    }
     fn peek(&self) -> Option<u8> {
         self.bytes.get(self.at).copied()
     }
     fn take(&mut self) -> io::Result<u8> {
-        let byte = self.peek().ok_or_else(invalid)?;
+        let byte = self.peek().ok_or_else(|| self.invalid("unexpected EOF"))?;
         self.at += 1;
         Ok(byte)
     }
@@ -106,7 +164,7 @@ impl Parser<'_> {
         if self.take()? == byte {
             Ok(())
         } else {
-            Err(invalid())
+            Err(self.invalid(&format!("expected delimiter 0x{byte:02x}")))
         }
     }
     fn name(&mut self) -> io::Result<String> {
@@ -118,10 +176,10 @@ impl Parser<'_> {
             self.at += 1;
         }
         if self.at == start {
-            return Err(invalid());
+            return Err(self.invalid("name"));
         }
         Ok(std::str::from_utf8(&self.bytes[start..self.at])
-            .map_err(|_| invalid())?
+            .map_err(|_| self.invalid("name UTF-8"))?
             .into())
     }
     fn string(&mut self) -> io::Result<Vec<u8>> {
@@ -151,7 +209,7 @@ impl Parser<'_> {
                                     break;
                                 }
                             }
-                            u8::try_from(n).map_err(|_| invalid())?
+                            u8::try_from(n).map_err(|_| self.invalid("octal escape exceeds byte"))?
                         }
                         b'x' => {
                             let start = self.at;
@@ -161,27 +219,29 @@ impl Parser<'_> {
                                 n = n
                                     .checked_mul(16)
                                     .and_then(|v| v.checked_add((b as char).to_digit(16)? as u16))
-                                    .ok_or_else(invalid)?;
+                                    .ok_or_else(|| self.invalid("hex escape overflow"))?;
                                 if n > 255 {
-                                    return Err(invalid());
+                                    return Err(self.invalid("hex escape exceeds byte"));
                                 }
                             }
                             if start == self.at {
-                                return Err(invalid());
+                                return Err(self.invalid("hex escape missing digits"));
                             }
                             n as u8
                         }
-                        _ => return Err(invalid()),
+                        _ => return Err(self.invalid(&format!("unsupported escape 0x{escaped:02x}"))),
                     });
                 }
-                b'\n' | b'\r' | 0 => return Err(invalid()),
+                byte @ (b'\n' | b'\r' | 0) => {
+                    return Err(self.invalid(&format!("unescaped control 0x{byte:02x} in string")));
+                }
                 byte => bytes.push(byte),
             }
         }
     }
     fn value(&mut self, depth: usize) -> io::Result<Value> {
         if depth > 32 {
-            return Err(invalid());
+            return Err(self.invalid("nesting limit"));
         }
         match self.peek() {
             Some(b'"') => Ok(Value::String(self.string()?)),
@@ -224,7 +284,7 @@ impl Parser<'_> {
                 self.expect(b']')?;
                 Ok(Value::List(items))
             }
-            _ => Err(invalid()),
+            _ => Err(self.invalid("value")),
         }
     }
     fn fields(&mut self) -> io::Result<Value> {
@@ -241,7 +301,7 @@ impl Parser<'_> {
 
 pub(super) fn parse(bytes: &[u8]) -> io::Result<Record> {
     if bytes.len() > MAX_RECORD {
-        return Err(invalid());
+        return Err(invalid(bytes, MAX_RECORD, "record limit"));
     }
     let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
     if bytes == b"(gdb) " || bytes == b"(gdb)" || bytes.is_empty() {
@@ -255,9 +315,9 @@ pub(super) fn parse(bytes: &[u8]) -> io::Result<Record> {
     let token = if p.at != start {
         Some(
             std::str::from_utf8(&bytes[start..p.at])
-                .map_err(|_| invalid())?
+                .map_err(|_| p.invalid("token UTF-8"))?
                 .parse()
-                .map_err(|_| invalid())?,
+                .map_err(|_| p.invalid("token overflow"))?,
         )
     } else {
         None
@@ -278,10 +338,10 @@ pub(super) fn parse(bytes: &[u8]) -> io::Result<Record> {
             kind,
             bytes: p.string()?,
         },
-        _ => return Err(invalid()),
+        _ => return Err(p.invalid("record prefix or token on stream")),
     };
     if p.at != bytes.len() {
-        return Err(invalid());
+        return Err(p.invalid("trailing bytes"));
     }
     Ok(record)
 }
