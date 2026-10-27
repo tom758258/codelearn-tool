@@ -983,6 +983,31 @@ fn close(directory: tempfile::TempDir, errors: &mut Vec<String>) {
     }
 }
 
+#[cfg(windows)]
+fn gdb_directory(path: &Path) -> PathBuf {
+    use std::{
+        ffi::OsString,
+        os::windows::ffi::{OsStrExt, OsStringExt},
+    };
+    use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+
+    let wide: Vec<_> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // GDB expands relative executables using a code-page cwd before launching.
+    // Use the same directory's existing short name; no alias is created.
+    // SAFETY: wide is NUL-terminated; a zero-sized output queries the size.
+    let length = unsafe { GetShortPathNameW(wide.as_ptr(), std::ptr::null_mut(), 0) };
+    if length == 0 {
+        return path.to_owned();
+    }
+    let mut short = vec![0; length as usize];
+    // SAFETY: short has the capacity passed to GetShortPathNameW.
+    let written = unsafe { GetShortPathNameW(wide.as_ptr(), short.as_mut_ptr(), length) };
+    if written == 0 || written >= length {
+        return path.to_owned();
+    }
+    OsString::from_wide(&short[..written as usize]).into()
+}
+
 fn supervise(
     mut request: DebugRequest,
     control: Control,
@@ -1075,6 +1100,8 @@ fn supervise(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(windows)]
+    command.current_dir(gdb_directory(working.path()));
     #[cfg(target_os = "linux")]
     command.env("SHELL", "/bin/sh");
     let mut cleanup_errors = Vec::new();
@@ -1134,10 +1161,11 @@ fn supervise(
         let mut load = b"-file-exec-and-symbols ".to_vec();
         #[cfg(windows)]
         // GDB opens executable paths using the system code page, not MI UTF-8.
-        let executable = Path::new("..").join(request.artifact.executable().file_name().unwrap());
+        let executable: &Path =
+            &Path::new("..").join(request.artifact.executable().file_name().unwrap());
         #[cfg(not(windows))]
         let executable = request.artifact.executable();
-        load.extend(quote_path(executable.as_ref())?);
+        load.extend(quote_path(executable)?);
         engine.initialize(load, began, request.startup_timeout)?;
         let name = io_dir
             .path()

@@ -50,6 +50,10 @@ Debugging uses the same selected runtime-file boundaries as Run, a separate work
 
 除錯沿用 Run 的指定輸入檔邊界，使用獨立工作目錄、預先 stdin 與增量原始 stdout/stderr 事件，**合計上限固定為 25 MiB**。結果保留 Artifact 與錯誤，不重複保存完整輸出。事件接收端過慢／中斷或 MI 回覆過長，會以可觀察的錯誤結束 Session。啟動、命令與 Running 逾時預設分別為 15、10、30 秒，接受正值 Duration，不能停用；每次進入 Running 重新計時，不計入停止等待時間。Stop 與 Drop 會要求非同步清理。
 
+On Windows, Core uses an existing short-name path for the same debug working directory when available. If Windows provides no usable short name, GDB can still fail to launch from paths its code page cannot represent.
+
+Windows 上，Core 會在可用時採用同一除錯工作目錄既有的短名稱路徑。若 Windows 未提供可用的短名稱，GDB 仍可能無法從其 Code Page 無法表示的路徑啟動程序。
+
 Debug cleanup uses the existing Windows Job Object; Linux uses an exclusive session and pidfds because GDB creates separate inferior process groups. Linux requires `/proc` and pidfd support (available on the Ubuntu 24.04 target). The host init/reaper must collect orphaned exited processes; Core does not change the application's global subreaper setting. If processes remain after finite cleanup, including zombies awaiting host reaping, cleanup errors are reported and the artifact is retained. This is process supervision, not a sandbox.
 
 除錯清理沿用 Windows Job Object；Linux 因 GDB 會另建 Inferior 程序群組，改用獨立 Session 與 pidfd，需支援 `/proc` 與 pidfd（Ubuntu 24.04 目標具備）。孤兒程序退出後由宿主 Init／Reaper 回收；Core 不改動應用程式的全域 Subreaper 設定。有限清理後若仍有殘留，包含等待宿主回收的 Zombie，會回報清理錯誤並保留 Artifact。此機制是程序管理，不是沙箱。

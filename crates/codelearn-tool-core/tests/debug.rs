@@ -24,7 +24,7 @@ impl Fixture {
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().join("workspace space & 資料");
-        let temp = root.path().join("temp space & 資料");
+        let temp = root.path().join("temp space & 資料 \u{6c49}\u{8bed}");
         fs::create_dir_all(workspace.join("input")).unwrap();
         fs::create_dir(&temp).unwrap();
         fs::write(workspace.join("input/data.bin"), [0, 255, 128, 42]).unwrap();
