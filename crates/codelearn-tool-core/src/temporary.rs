@@ -1,7 +1,10 @@
 use std::{
     io,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 /// Keep this observer after dropping an artifact to inspect automatic cleanup errors.
@@ -24,6 +27,7 @@ impl CleanupReport {
 #[derive(Debug)]
 pub(crate) struct Directory {
     inner: Option<tempfile::TempDir>,
+    retained: AtomicBool,
     pub report: CleanupReport,
 }
 
@@ -35,6 +39,7 @@ impl Directory {
                     .prefix("codelearn-build-")
                     .tempdir_in(root)?,
             ),
+            retained: AtomicBool::new(false),
             report,
         })
     }
@@ -42,11 +47,20 @@ impl Directory {
     pub fn path(&self) -> &Path {
         self.inner.as_ref().unwrap().path()
     }
+
+    pub fn retain(&self) {
+        self.retained.store(true, Ordering::Relaxed);
+    }
 }
 
 impl Drop for Directory {
     fn drop(&mut self) {
         if let Some(dir) = self.inner.take() {
+            if *self.retained.get_mut() {
+                // Preserve files only; TempDir and its owner are still released.
+                let _ = dir.keep();
+                return;
+            }
             let path = dir.path().to_owned();
             if let Err(error) = dir.close() {
                 self.report

@@ -34,9 +34,13 @@ Each run uses a fresh working directory within its artifact. Optionally select a
 
 每次執行均在 Artifact 內建立新的工作目錄。需要輸入檔時，指定 Workspace 內的 `input_root` 與明確列出的相對 `input_files`；僅複製這些檔案並保留目錄結構。修改副本不會覆寫來源檔。成功啟動的執行目錄保留至最後一份 Artifact 引用釋放；`RunResult.artifact` 會在結果存活期間保留它們。這些檔案是暫存資料。準備或啟動失敗時會盡可能只刪除當次部分目錄，並回報清理失敗。
 
-Runs reuse Windows Job Objects and Linux process groups, cleaning up controlled descendants after normal exit, stop, timeout, or output overflow. Pipe collection has a bounded cleanup period and reports pipes that remain open. This is **not a sandbox**: student programs retain ordinary OS access, can access other files with absolute paths or `..`, and may escape process-group control. The output cap does not limit program memory, generated files, or total memory across multiple sessions.
+If process cleanup fails, Core retries once using the existing finite waits. Recovery also removes a failed startup's partial run directory. If cleanup still cannot be confirmed, the supervisor stops retrying and releases its process handles; the entire artifact directory, including its other run directories, remains on disk after the final reference is released. The start error or run result and `BuildResult.cleanup` report the failures, retained path, and manual cleanup requirement. Confirm that all processes using that artifact have terminated before deleting it. There is no later automatic cleanup; OS failures may leave processes running or unreaped.
 
-執行流程沿用 Windows Job Object 與 Linux Process Group，在正常退出、停止、逾時或輸出超限後清理受控後代。管線收集有清理等待期限，未關閉的管線會回報錯誤。這**不是沙箱**：學生程式仍有一般作業系統權限，可透過絕對路徑或 `..` 存取其他檔案，也可能逃離程序群組控制。輸出上限不限制程式記憶體、產生的檔案或多個 Session 的總記憶體。
+程序清理失敗時，Core 會沿用既有的有限等待再試一次；重試成功也會刪除啟動失敗所建立的部分 Run 目錄。若仍無法確認清理完成，監督執行緒會停止重試並釋放持有的程序控制代碼；整個 Artifact 目錄（包含其下其他 Run 目錄）會在最後引用釋放後繼續保留於磁碟。啟動錯誤或執行結果，以及 `BuildResult.cleanup`，都會回報失敗原因、保留路徑與手動清理要求。刪除前必須確認所有使用該 Artifact 的程序均已終止。之後不會自動清理；OS 故障仍可能留下執行中或未回收的程序。
+
+Runs reuse Windows Job Objects and Linux process groups, cleaning up controlled descendants after normal exit, stop, timeout, or output overflow. Pipe collection has a bounded cleanup period and reports pipes that remain open. If the OS refuses I/O cancellation, an existing pipe worker may remain blocked while owning its pipe and an artifact reference; this is reported as a cleanup failure. This is **not a sandbox**: student programs retain ordinary OS access, can access other files with absolute paths or `..`, and may escape process-group control. The output cap does not limit program memory, generated files, or total memory across multiple sessions.
+
+執行流程沿用 Windows Job Object 與 Linux Process Group，在正常退出、停止、逾時或輸出超限後清理受控後代。管線收集有清理等待期限，未關閉的管線會回報錯誤。若 OS 拒絕取消 I/O，既有管線執行緒仍可能阻塞並持有管線與 Artifact 引用；此情況會回報為清理失敗。這**不是沙箱**：學生程式仍有一般作業系統權限，可透過絕對路徑或 `..` 存取其他檔案，也可能逃離程序群組控制。輸出上限不限制程式記憶體、產生的檔案或多個 Session 的總記憶體。
 
 ## Repository / 專案結構
 

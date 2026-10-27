@@ -76,6 +76,7 @@ struct ArtifactData {
 }
 
 /// Clones retain the executable and any text snapshot until the final drop.
+/// An unconfirmed run cleanup can retain the directory on disk after release.
 #[derive(Clone, Debug)]
 pub struct BuildArtifact(Arc<ArtifactData>);
 
@@ -85,6 +86,12 @@ impl BuildArtifact {
     }
     pub fn directory(&self) -> &Path {
         self.0.directory.path()
+    }
+    pub(crate) fn cleanup_report(&self) -> &CleanupReport {
+        &self.0.directory.report
+    }
+    pub(crate) fn retain(&self) {
+        self.0.directory.retain();
     }
 }
 
@@ -320,4 +327,36 @@ pub fn compile(request: &BuildRequest) -> BuildResult {
     }
     // Failure paths drop only this build's directory before the result is observed.
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retained_artifact_files_outlive_all_references() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = Directory::new(root.path(), CleanupReport::default()).unwrap();
+        let path = directory.path().to_owned();
+        let executable = path.join("program");
+        fs::write(&executable, b"synthetic artifact").unwrap();
+        let run = path.join("run-example");
+        fs::create_dir(&run).unwrap();
+        let artifact = BuildArtifact(Arc::new(ArtifactData {
+            directory,
+            executable: executable.clone(),
+        }));
+        let last = artifact.clone();
+        let allocation = Arc::downgrade(&artifact.0);
+        artifact.retain();
+        drop(artifact);
+        assert_eq!(last.directory(), path);
+        drop(last);
+        assert!(allocation.upgrade().is_none(), "artifact owner was leaked");
+        assert_eq!(fs::read(executable).unwrap(), b"synthetic artifact");
+        assert!(run.is_dir());
+        // The test owns these synthetic files and has no running process.
+        fs::remove_dir_all(path).unwrap();
+        assert!(root.path().is_dir());
+    }
 }

@@ -3,7 +3,7 @@ use std::{
     fs::{self, OpenOptions},
     io,
     path::{Component, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     sync::{Arc, Mutex, MutexGuard, mpsc},
     thread,
     time::{Duration, Instant},
@@ -65,6 +65,7 @@ pub struct RunResult {
     pub cleanup_errors: Vec<String>,
     pub working_directory: PathBuf,
     /// Retains all run directories until the last artifact reference is dropped.
+    /// Unconfirmed process cleanup retains them on disk even after that drop.
     pub artifact: BuildArtifact,
 }
 
@@ -286,6 +287,50 @@ fn close_directory(directory: tempfile::TempDir, errors: &mut Vec<String>) {
     }
 }
 
+fn finish_process(
+    child: &mut Child,
+    mut terminate_group: impl FnMut() -> io::Result<()>,
+    status: &mut Option<ExitStatus>,
+    pipes: &mut pipes::Workers,
+    errors: &mut Vec<String>,
+) -> bool {
+    let mut group_cleaned = false;
+    // The initial cleanup and at most one retry use the existing finite waits.
+    // Pipe cleanup happens once, before retrying any unresolved process cleanup.
+    for attempt in 0..2 {
+        if !group_cleaned {
+            match terminate_group() {
+                Ok(()) => group_cleaned = true,
+                Err(error) => errors.push(format!("process group cleanup: {error}")),
+            }
+        }
+        if status.is_none() {
+            *status = process::stop_and_reap(child, errors);
+        }
+        if attempt == 0 {
+            pipes.finish(errors);
+        }
+        if group_cleaned && status.is_some() {
+            return true;
+        }
+    }
+    false
+}
+
+fn retain_artifact(artifact: &BuildArtifact, errors: &mut Vec<String>) {
+    artifact.retain();
+    errors.push(format!(
+        "process cleanup could not be confirmed after two attempts; retained artifact directory: {}; \
+         confirm all processes using this artifact have terminated before manually removing this directory; \
+         no further automatic process cleanup or directory removal will be attempted",
+        artifact.directory().display()
+    ));
+    // Keep failures observable even when a session was dropped without wait().
+    for error in errors {
+        artifact.cleanup_report().record(error);
+    }
+}
+
 type Ready = mpsc::SyncSender<Result<(BuildArtifact, PathBuf), RunStartError>>;
 fn supervise(
     mut request: RunRequest,
@@ -324,39 +369,30 @@ fn supervise(
     let mut pipes = pipes::Workers::new(state.clone(), request.artifact.clone());
     let setup = pipes.start(&mut child, std::mem::take(&mut request.stdin));
     if let Err(error) = setup {
-        let mut group_cleaned = match group.terminate() {
-            Ok(()) => true,
-            Err(error) => {
-                cleanup_errors.push(error.to_string());
-                false
-            }
-        };
-        let status = process::stop_and_reap(&mut child, &mut cleanup_errors);
-        pipes.finish(&mut cleanup_errors);
-        if status.is_some() && group_cleaned {
+        let mut status = None;
+        if finish_process(
+            &mut child,
+            || group.terminate(),
+            &mut status,
+            &mut pipes,
+            &mut cleanup_errors,
+        ) {
+            // This also removes the partial directory when only the retry
+            // succeeds, before the startup error is returned to the caller.
             close_directory(directory, &mut cleanup_errors);
         } else {
-            // Do not remove files needed by an unreaped process. The supervisor
-            // retains the artifact while retrying after reporting startup failure.
+            retain_artifact(&request.artifact, &mut cleanup_errors);
             let _ = directory.keep();
         }
+        drop(pipes);
+        #[cfg(windows)]
+        drop(group);
+        drop(child);
+        drop(request);
         let _ = ready.send(Err(RunStartError {
             error,
             cleanup_errors,
         }));
-        let mut reaped = status.is_some();
-        while !reaped || !group_cleaned {
-            if !group_cleaned {
-                group_cleaned = group.terminate().is_ok();
-            }
-            if !reaped {
-                reaped = matches!(child.try_wait(), Ok(Some(_)));
-                if !reaped {
-                    let _ = child.kill();
-                }
-            }
-            thread::sleep(Duration::from_millis(100));
-        }
         return;
     }
     let working_directory = directory.keep();
@@ -391,17 +427,15 @@ fn supervise(
         drop(state);
         thread::sleep(POLL.min(request.timeout.saturating_sub(started.elapsed())));
     };
-    let mut group_cleaned = match group.terminate() {
-        Ok(()) => true,
-        Err(error) => {
-            cleanup_errors.push(error.to_string());
-            false
-        }
-    };
-    if status.is_none() {
-        status = process::stop_and_reap(&mut child, &mut cleanup_errors);
+    if !finish_process(
+        &mut child,
+        || group.terminate(),
+        &mut status,
+        &mut pipes,
+        &mut cleanup_errors,
+    ) {
+        retain_artifact(&request.artifact, &mut cleanup_errors);
     }
-    pipes.finish(&mut cleanup_errors);
     let mut captured = lock(&state);
     // A final pipe buffer may be collected after natural exit. Report overflow
     // and I/O failure, but never apply late cancellation to that natural exit.
@@ -425,28 +459,9 @@ fn supervise(
     };
     drop(captured);
     drop(pipes);
-    if status.is_some() && group_cleaned {
-        #[cfg(windows)]
-        drop(group);
-        drop(child);
-        drop(request);
-        let _ = result_sender.send(result);
-        return;
-    }
+    #[cfg(windows)]
+    drop(group);
+    drop(child);
+    drop(request);
     let _ = result_sender.send(result);
-    // An OS termination failure must not release the executable while it is in
-    // use. Reporting cleanup failure does not require the caller to wait forever.
-    let mut reaped = status.is_some();
-    while !reaped || !group_cleaned {
-        if !group_cleaned {
-            group_cleaned = group.terminate().is_ok();
-        }
-        if !reaped {
-            reaped = matches!(child.try_wait(), Ok(Some(_)));
-            if !reaped {
-                let _ = child.kill();
-            }
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
 }
