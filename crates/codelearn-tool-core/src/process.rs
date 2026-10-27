@@ -7,6 +7,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub(crate) use platform::spawn;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProcessFailure {
     Start(String),
@@ -99,7 +101,7 @@ pub(crate) fn execute(command: &mut Command, directory: &Path, timeout: Duration
     output
 }
 
-fn stop_and_reap(child: &mut Child, cleanup: &mut Vec<String>) -> Option<ExitStatus> {
+pub(crate) fn stop_and_reap(child: &mut Child, cleanup: &mut Vec<String>) -> Option<ExitStatus> {
     if let Err(error) = child.kill()
         && !matches!(child.try_wait(), Ok(Some(_)))
     {
@@ -111,7 +113,7 @@ fn stop_and_reap(child: &mut Child, cleanup: &mut Vec<String>) -> Option<ExitSta
             Ok(Some(status)) => return Some(status),
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
             Ok(None) => {
-                cleanup.push("compiler did not exit after termination".into());
+                cleanup.push("process did not exit after termination".into());
                 return None;
             }
             Err(error) => {

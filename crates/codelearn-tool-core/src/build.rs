@@ -149,7 +149,7 @@ pub(crate) fn canonical_path(path: &Path) -> io::Result<PathBuf> {
     Ok(resolved)
 }
 
-fn directory(path: &Path) -> io::Result<PathBuf> {
+pub(crate) fn directory(path: &Path) -> io::Result<PathBuf> {
     let path = canonical_path(path)?;
     if !path.is_dir() {
         return Err(io::Error::new(
@@ -162,7 +162,7 @@ fn directory(path: &Path) -> io::Result<PathBuf> {
 
 // Compare actual directory identities as well as canonical components (Windows
 // casing, junctions and symlinks must not bypass ancestry checks).
-fn contains(root: &Path, path: &Path) -> io::Result<bool> {
+pub(crate) fn contains(root: &Path, path: &Path) -> io::Result<bool> {
     for parent in path.ancestors() {
         if same_file::is_same_file(root, parent)? {
             return Ok(true);

@@ -6,13 +6,13 @@ A Windows and Linux desktop application for learning programming, starting with 
 
 ## Current scope / 目前範圍
 
-The desktop currently displays a minimal welcome window. Its independent Rust Core library now provides GCC/GDB discovery and validation, plus C11 compile/link APIs. The Tauri 2 desktop shell uses React, TypeScript, and Vite; these Core features are not connected to the UI yet.
+The desktop currently displays a minimal welcome window. Its independent Rust Core library now provides GCC/GDB discovery and validation, plus C11 compile/link and supervised program execution APIs. The Tauri 2 desktop shell uses React, TypeScript, and Vite; these Core features are not connected to the UI yet.
 
-目前桌面程式仍僅顯示最小歡迎視窗。獨立 Rust Core Library 已提供 GCC/GDB 偵測與驗證，以及 C11 編譯／連結 API。桌面外殼採用 Tauri 2、React、TypeScript、Vite；這些 Core 功能尚未串接至 UI。
+目前桌面程式仍僅顯示最小歡迎視窗。獨立 Rust Core Library 已提供 GCC/GDB 偵測與驗證，以及 C11 編譯／連結與受控程序執行 API。桌面外殼採用 Tauri 2、React、TypeScript、Vite；這些 Core 功能尚未串接至 UI。
 
-C editing, toolchain installation, program execution/debugging, lessons, and learning progress are **not implemented**. No telemetry, cloud services, or student-data persistence is included.
+C editing, toolchain installation, desktop run controls, debugging, lessons, and learning progress are **not implemented**. No telemetry, cloud services, or student-data persistence is included.
 
-C 程式編輯、工具鏈安裝、程式執行／除錯、課程及學習進度均**尚未實作**。目前不包含遙測、雲端服務或學生資料儲存。
+C 程式編輯、工具鏈安裝、桌面執行操作、除錯、課程及學習進度均**尚未實作**。目前不包含遙測、雲端服務或學生資料儲存。
 
 Core callers explicitly select an absolute GCC executable path and provide existing, separate Workspace and CodeLearnTemp directories. Selected `.c` files, logical source directories, and include directories must resolve inside the Workspace. Text input is compiled from a private snapshot and may link additional selected `.c` files. GCC is validated by a real compile/link; GDB is checked independently for version/startup only. Discovery suggests usable candidates in explicit-path, PATH, then common-location order and never selects one automatically.
 
@@ -25,6 +25,18 @@ Each build uses C11 with `-Wall -Wextra -g -O0 -fdiagnostics-color=never`, prese
 Compiler supervision uses Windows Job Objects or Linux process groups, including descendant cleanup on timeout and normal compiler exit. Output is captured in private files to avoid pipe deadlocks. GCC inherits the process environment and manages its own intermediate-file locations. Supervision and canonical path checks are not an OS sandbox and do not contain processes that deliberately escape their managed group, or all indirect header/library access.
 
 編譯程序透過 Windows Job Object 或 Linux Process Group 管理，在逾時與編譯器正常退出時清理受控衍生程序。輸出擷取至私有檔案以避免管線死鎖。GCC 繼承程序環境，並自行管理中間檔位置。程序管理與實際路徑核對不是作業系統沙箱，無法涵蓋刻意逃離管理群組的程序或所有間接 Header／Library 存取。
+
+Core callers can run a `BuildArtifact` with `run::start(RunRequest::new(artifact, workspace_root))`, request cancellation through `session.stop()` or a shareable `stop_handle()`, and collect the result with `session.wait()`. Dropping a session requests stop without waiting for cleanup. Stdin is pre-supplied bytes and closes after writing; stdout/stderr are drained concurrently as raw bytes and returned after cleanup. Timeout defaults to 30 seconds and accepts any positive `Duration`. Output is limited to a fixed **25 MiB combined** across stdout/stderr; exceeding it terminates the controlled processes and retains only the allowed bytes. Nonzero exit codes remain normal process exits. Start errors, execution errors, and process cleanup errors are reported separately.
+
+Core 呼叫端可透過 `run::start(RunRequest::new(artifact, workspace_root))` 執行 `BuildArtifact`，使用 `session.stop()` 或可共享的 `stop_handle()` 要求停止，再以 `session.wait()` 取得結果。釋放 Session 會要求停止，但不會同步等待清理。stdin 預先提供原始 Bytes，寫完即關閉；stdout/stderr 同時排空，完成清理後統一回傳原始 Bytes。逾時預設 30 秒，可指定任意正值 `Duration`。stdout/stderr 的**合計上限固定為 25 MiB**；實際超限才終止受控程序，並保留額度內資料。非零 Exit Code 仍屬一般程序退出。啟動、執行與程序清理錯誤分開回報。
+
+Each run uses a fresh working directory within its artifact. Optionally select an `input_root` inside the Workspace and explicit relative `input_files`; only those files are copied, preserving their directory structure. Changes to the copies do not overwrite the source files. Successful runs keep their directories until the final artifact reference is released; `RunResult.artifact` retains them while the result is alive. Files in these directories are temporary. Failed preparation/startup removes only the partial run directory where possible and reports cleanup failures.
+
+每次執行均在 Artifact 內建立新的工作目錄。需要輸入檔時，指定 Workspace 內的 `input_root` 與明確列出的相對 `input_files`；僅複製這些檔案並保留目錄結構。修改副本不會覆寫來源檔。成功啟動的執行目錄保留至最後一份 Artifact 引用釋放；`RunResult.artifact` 會在結果存活期間保留它們。這些檔案是暫存資料。準備或啟動失敗時會盡可能只刪除當次部分目錄，並回報清理失敗。
+
+Runs reuse Windows Job Objects and Linux process groups, cleaning up controlled descendants after normal exit, stop, timeout, or output overflow. Pipe collection has a bounded cleanup period and reports pipes that remain open. This is **not a sandbox**: student programs retain ordinary OS access, can access other files with absolute paths or `..`, and may escape process-group control. The output cap does not limit program memory, generated files, or total memory across multiple sessions.
+
+執行流程沿用 Windows Job Object 與 Linux Process Group，在正常退出、停止、逾時或輸出超限後清理受控後代。管線收集有清理等待期限，未關閉的管線會回報錯誤。這**不是沙箱**：學生程式仍有一般作業系統權限，可透過絕對路徑或 `..` 存取其他檔案，也可能逃離程序群組控制。輸出上限不限制程式記憶體、產生的檔案或多個 Session 的總記憶體。
 
 ## Repository / 專案結構
 
@@ -102,6 +114,10 @@ Build the frontend before direct Cargo checks of Tauri. No frontend test suite i
 Real GCC checks are opt-in: set `CODELEARN_TEST_GCC` to an existing absolute GCC path, then run `cargo test --workspace --locked --test build -- --ignored --nocapture`. Optionally set `CODELEARN_TEST_GDB` to check a real GDB, and `CODELEARN_TEST_REQUIRE_PATH=1` to require the selected GCC to also be discovered through the current PATH. These checks compile synthetic sources without executing the resulting programs. Tools are never installed automatically.
 
 真實 GCC 檢查須明確啟用：將 `CODELEARN_TEST_GCC` 設為既有 GCC 的絕對路徑，再執行 `cargo test --workspace --locked --test build -- --ignored --nocapture`。可選擇設定 `CODELEARN_TEST_GDB` 以檢查真實 GDB；設定 `CODELEARN_TEST_REQUIRE_PATH=1` 則要求選定的 GCC 亦可從目前 PATH 偵測到。這些檢查只編譯合成來源，不執行產出的程式，也不會自動安裝工具。
+
+To validate execution with synthetic C programs, set `CODELEARN_TEST_GCC` as above and run `cargo test --workspace --locked --test run -- --ignored --nocapture`. Three grouped integration tests cover raw I/O and selected input files, path/start failures and artifact lifetime, stop/timeout/drop and descendants, and the combined output boundary. The Linux cleanup check also uses a bounded descendant that deliberately leaves its process group. The existing conditional Core integration steps run these checks on Windows and Linux using their existing toolchains; documentation-only and UI-only changes do not enable them.
+
+若要以合成 C 程式驗證執行功能，依上述方式設定 `CODELEARN_TEST_GCC`，再執行 `cargo test --workspace --locked --test run -- --ignored --nocapture`。三組整合測試涵蓋原始 I/O 與指定輸入檔、路徑／啟動失敗與 Artifact 生命週期、停止／逾時／釋放與後代程序，以及共用輸出額度的邊界。Linux 清理檢查另使用會自行結束、刻意離開程序群組的合成後代。既有條件式 Core 整合步驟會使用原有工具鏈，在 Windows 與 Linux 執行這些檢查；純文件或 UI 修改不會啟用它們。
 
 ## Desktop builds / 桌面建置
 
