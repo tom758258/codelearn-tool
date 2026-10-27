@@ -6,13 +6,13 @@ A Windows and Linux desktop application for learning programming, starting with 
 
 ## Current scope / 目前範圍
 
-The desktop currently displays a minimal welcome window. Its independent Rust Core library now provides GCC/GDB discovery and validation, plus C11 compile/link and supervised program execution APIs. The Tauri 2 desktop shell uses React, TypeScript, and Vite; these Core features are not connected to the UI yet.
+The desktop currently displays a minimal welcome window. Its independent Rust Core library provides GCC/GDB discovery and validation, C11 compile/link, supervised program execution, and GDB/MI3 debug session APIs. The Tauri 2 desktop shell uses React, TypeScript, and Vite; these Core features are not connected to the UI yet.
 
-目前桌面程式仍僅顯示最小歡迎視窗。獨立 Rust Core Library 已提供 GCC/GDB 偵測與驗證，以及 C11 編譯／連結與受控程序執行 API。桌面外殼採用 Tauri 2、React、TypeScript、Vite；這些 Core 功能尚未串接至 UI。
+目前桌面程式仍僅顯示最小歡迎視窗。獨立 Rust Core Library 提供 GCC/GDB 偵測與驗證、C11 編譯／連結、受控程序執行，以及 GDB/MI3 除錯 Session API。桌面外殼採用 Tauri 2、React、TypeScript、Vite；這些 Core 功能尚未串接至 UI。
 
-C editing, toolchain installation, desktop run controls, debugging, lessons, and learning progress are **not implemented**. No telemetry, cloud services, or student-data persistence is included.
+C editing, toolchain installation, desktop run/debug controls, lessons, and learning progress are **not implemented**. No telemetry, cloud services, or student-data persistence is included.
 
-C 程式編輯、工具鏈安裝、桌面執行操作、除錯、課程及學習進度均**尚未實作**。目前不包含遙測、雲端服務或學生資料儲存。
+C 程式編輯、工具鏈安裝、桌面執行／除錯操作、課程及學習進度均**尚未實作**。目前不包含遙測、雲端服務或學生資料儲存。
 
 Core callers explicitly select an absolute GCC executable path and provide existing, separate Workspace and CodeLearnTemp directories. Selected `.c` files, logical source directories, and include directories must resolve inside the Workspace. Text input is compiled from a private snapshot and may link additional selected `.c` files. GCC is validated by a real compile/link; GDB is checked independently for version/startup only. Discovery suggests usable candidates in explicit-path, PATH, then common-location order and never selects one automatically.
 
@@ -41,6 +41,18 @@ If process cleanup fails, Core retries once using the existing finite waits. Rec
 Runs reuse Windows Job Objects and Linux process groups, cleaning up controlled descendants after normal exit, stop, timeout, or output overflow. Pipe collection has a bounded cleanup period and reports pipes that remain open. If the OS refuses I/O cancellation, an existing pipe worker may remain blocked while owning its pipe and an artifact reference; this is reported as a cleanup failure. This is **not a sandbox**: student programs retain ordinary OS access, can access other files with absolute paths or `..`, and may escape process-group control. The output cap does not limit program memory, generated files, or total memory across multiple sessions.
 
 執行流程沿用 Windows Job Object 與 Linux Process Group，在正常退出、停止、逾時或輸出超限後清理受控後代。管線收集有清理等待期限，未關閉的管線會回報錯誤。若 OS 拒絕取消 I/O，既有管線執行緒仍可能阻塞並持有管線與 Artifact 引用；此情況會回報為清理失敗。這**不是沙箱**：學生程式仍有一般作業系統權限，可透過絕對路徑或 `..` 存取其他檔案，也可能逃離程序群組控制。輸出上限不限制程式記憶體、產生的檔案或多個 Session 的總記憶體。
+
+Core callers can debug a `BuildArtifact` with `debug::start(DebugRequest::new(artifact, gdb, workspace_root))`, explicitly selecting an absolute GDB path. Startup disables GDB init files and auto-loading, checks MI3 capabilities, and requests execution to `main`. Consume `session.take_events()` while using breakpoints, continue/step, pause, call stack, and frame variables. Command acceptance and a later `Stopped` event are separate; only the actual stop confirms main entry or completion of a step/pause. One local inferior uses all-stop mode; restart, attach, remote debugging, watch expressions, and interactive stdin are not provided.
+
+Core 呼叫端可使用 `debug::start(DebugRequest::new(artifact, gdb, workspace_root))` 除錯 `BuildArtifact`，並明確選定 GDB 絕對路徑。啟動時停用 GDB 初始化檔與自動載入、確認 MI3 能力，再要求執行至 `main`。操作斷點、繼續／步進、暫停、呼叫堆疊與指定 Frame 變數時，須持續讀取 `session.take_events()`。命令接受與稍後的 `Stopped` 事件分開；只有實際停止才能確認進入 main 或完成步進／暫停。首版僅支援單一本機 Inferior 與 All-stop，不提供重新啟動、Attach、遠端除錯、Watch Expression 或互動式 stdin。
+
+Debugging uses the same selected runtime-file boundaries as Run, a separate working directory, pre-supplied stdin, and incremental raw stdout/stderr events, with a fixed **25 MiB combined** limit. Result data retains the artifact and errors without duplicating output. A slow/disconnected event consumer or oversized MI reply ends the session with an observable error. Startup, command, and running timeouts default to 15, 10, and 30 seconds, accept positive durations, and cannot be disabled; running time resets on each transition to Running and excludes stopped time. Stop and Drop request asynchronous cleanup.
+
+除錯沿用 Run 的指定輸入檔邊界，使用獨立工作目錄、預先 stdin 與增量原始 stdout/stderr 事件，**合計上限固定為 25 MiB**。結果保留 Artifact 與錯誤，不重複保存完整輸出。事件接收端過慢／中斷或 MI 回覆過長，會以可觀察的錯誤結束 Session。啟動、命令與 Running 逾時預設分別為 15、10、30 秒，接受正值 Duration，不能停用；每次進入 Running 重新計時，不計入停止等待時間。Stop 與 Drop 會要求非同步清理。
+
+Debug cleanup uses the existing Windows Job Object; Linux uses an exclusive session and pidfds because GDB creates separate inferior process groups. Linux requires `/proc` and pidfd support (available on the Ubuntu 24.04 target). The host init/reaper must collect orphaned exited processes; Core does not change the application's global subreaper setting. If processes remain after finite cleanup, including zombies awaiting host reaping, cleanup errors are reported and the artifact is retained. This is process supervision, not a sandbox.
+
+除錯清理沿用 Windows Job Object；Linux 因 GDB 會另建 Inferior 程序群組，改用獨立 Session 與 pidfd，需支援 `/proc` 與 pidfd（Ubuntu 24.04 目標具備）。孤兒程序退出後由宿主 Init／Reaper 回收；Core 不改動應用程式的全域 Subreaper 設定。有限清理後若仍有殘留，包含等待宿主回收的 Zombie，會回報清理錯誤並保留 Artifact。此機制是程序管理，不是沙箱。
 
 ## Repository / 專案結構
 
@@ -122,6 +134,10 @@ Real GCC checks are opt-in: set `CODELEARN_TEST_GCC` to an existing absolute GCC
 To validate execution with synthetic C programs, set `CODELEARN_TEST_GCC` as above and run `cargo test --workspace --locked --test run -- --ignored --nocapture`. Three grouped integration tests cover raw I/O and selected input files, path/start failures and artifact lifetime, stop/timeout/drop and descendants, and the combined output boundary. The Linux cleanup check also uses a bounded descendant that deliberately leaves its process group. The existing conditional Core integration steps run these checks on Windows and Linux using their existing toolchains; documentation-only and UI-only changes do not enable them.
 
 若要以合成 C 程式驗證執行功能，依上述方式設定 `CODELEARN_TEST_GCC`，再執行 `cargo test --workspace --locked --test run -- --ignored --nocapture`。三組整合測試涵蓋原始 I/O 與指定輸入檔、路徑／啟動失敗與 Artifact 生命週期、停止／逾時／釋放與後代程序，以及共用輸出額度的邊界。Linux 清理檢查另使用會自行結束、刻意離開程序群組的合成後代。既有條件式 Core 整合步驟會使用原有工具鏈，在 Windows 與 Linux 執行這些檢查；純文件或 UI 修改不會啟用它們。
+
+For real debug checks, select both `CODELEARN_TEST_GCC` and `CODELEARN_TEST_GDB`, then run `cargo test --workspace --locked --test debug -- --ignored --nocapture`. Three grouped tests cover session operations, I/O and limits, and process/resource lifetime. They run in the existing conditional Core toolchain steps on both platforms. A Linux container needs an init that reaps orphaned exited processes, as a normal desktop host does; a reaper used by a local test environment is not a Core dependency or a substitute for Core terminating the processes.
+
+真實除錯檢查須同時選定 `CODELEARN_TEST_GCC` 與 `CODELEARN_TEST_GDB`，再執行 `cargo test --workspace --locked --test debug -- --ignored --nocapture`。三組測試涵蓋 Session 操作、I/O 與限制，以及程序／資源生命週期，並整合至兩平台既有的條件式 Core 工具鏈步驟。Linux 容器需如一般桌面宿主般，具備可回收已退出孤兒程序的 Init；本機測試環境的 Reaper 不是 Core 相依，也不能取代 Core 終止程序的責任。
 
 ## Desktop builds / 桌面建置
 

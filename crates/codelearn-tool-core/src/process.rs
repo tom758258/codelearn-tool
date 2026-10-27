@@ -7,6 +7,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(windows)]
+pub(crate) use platform::Group;
 pub(crate) use platform::spawn;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

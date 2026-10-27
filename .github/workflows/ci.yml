@@ -113,6 +113,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --workspace --locked --test run -- --ignored --nocapture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --workspace --locked --test debug -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test with real GCC and GDB (Linux)
         if: runner.os == 'Linux' && steps.toolchain-changes.outputs.integration == 'true'
         shell: bash
@@ -135,6 +137,7 @@ jobs:
           "$CODELEARN_TEST_GDB" --version
           cargo test --workspace --locked --test build -- --ignored --nocapture
           cargo test --workspace --locked --test run -- --ignored --nocapture
+          cargo test --workspace --locked --test debug -- --ignored --nocapture
 
   tauri:
     name: Tauri ${{ matrix.platform }}
