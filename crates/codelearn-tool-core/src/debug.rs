@@ -786,7 +786,9 @@ impl Engine {
                 "breakpoint-hit" => StopReason::Breakpoint,
                 "end-stepping-range" | "function-finished" | "location-reached" => StopReason::Step,
                 "signal-received"
-                    if self.pause_requested && signal.as_deref() == Some("SIGINT") =>
+                    if self.pause_requested
+                        && (signal.as_deref() == Some("SIGINT")
+                            || (cfg!(windows) && signal.as_deref() == Some("SIGTRAP"))) =>
                 {
                     StopReason::Pause
                 }
@@ -1130,7 +1132,12 @@ fn supervise(
             return Err(io::Error::other("GDB auto-loading was not disabled"));
         }
         let mut load = b"-file-exec-and-symbols ".to_vec();
-        load.extend(quote_path(request.artifact.executable())?);
+        #[cfg(windows)]
+        // GDB opens executable paths using the system code page, not MI UTF-8.
+        let executable = Path::new("..").join(request.artifact.executable().file_name().unwrap());
+        #[cfg(not(windows))]
+        let executable = request.artifact.executable();
+        load.extend(quote_path(executable.as_ref())?);
         engine.initialize(load, began, request.startup_timeout)?;
         let name = io_dir
             .path()

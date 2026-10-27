@@ -64,6 +64,11 @@ impl Fixture {
         let (reason, frame) = stopped(&events);
         assert_eq!(reason, StopReason::MainEntry);
         assert_eq!(frame.function.as_deref(), Some("main"));
+        assert_eq!(
+            fs::canonicalize(frame.file.unwrap()).unwrap(),
+            fs::canonicalize(&self.source).unwrap()
+        );
+        assert!(frame.line.is_some());
         (session, events)
     }
 }
@@ -185,12 +190,22 @@ fn real_debug_operations_frames_and_pause() {
     let breakpoint = session
         .set_breakpoint(&f.source, line("inner-entry"))
         .unwrap();
+    assert_eq!(
+        fs::canonicalize(breakpoint.file.as_ref().unwrap()).unwrap(),
+        fs::canonicalize(&f.source).unwrap()
+    );
+    assert_eq!(breakpoint.line, Some(line("inner-entry")));
     assert!(session.set_breakpoint(&f.source, 0).is_err());
     assert!(session.set_breakpoint(&f.source, 99999).is_err());
     session.continue_execution().unwrap();
     let (reason, frame) = stopped(&events);
     assert_eq!(reason, StopReason::Breakpoint);
     assert_eq!(frame.function.as_deref(), Some("inner"));
+    assert_eq!(
+        fs::canonicalize(frame.file.unwrap()).unwrap(),
+        fs::canonicalize(&f.source).unwrap()
+    );
+    assert_eq!(frame.line, Some(line("inner-entry")));
     let stack = session.call_stack().unwrap();
     assert_eq!(stack[0].function.as_deref(), Some("inner"));
     assert_eq!(stack[1].function.as_deref(), Some("outer"));
@@ -228,6 +243,14 @@ fn real_debug_operations_frames_and_pause() {
         session.call_stack(),
         Err(DebugCommandError::InvalidState(DebugState::Running))
     ));
+    assert!(matches!(
+        session.set_breakpoint(&f.source, line("inner-entry")),
+        Err(DebugCommandError::InvalidState(DebugState::Running))
+    ));
+    assert_eq!(
+        session.remove_breakpoint(&breakpoint.id),
+        Err(DebugCommandError::InvalidState(DebugState::Running))
+    );
     session.pause().unwrap();
     assert_eq!(stopped(&events).0, StopReason::Pause);
     session.continue_execution().unwrap();
@@ -396,6 +419,86 @@ fn real_debug_start_failures_process_cleanup_and_artifact_lifetime() {
         thread::sleep(Duration::from_millis(100));
         assert_eq!(before, fs::read(dir.join("heartbeat")).unwrap());
     }
+    let exit_fixture = Fixture::new();
+    let (session, events) = exit_fixture.start("descendant-exit");
+    let dir = session.working_directory().to_owned();
+    session
+        .set_breakpoint(&exit_fixture.source, line("descendant-return"))
+        .unwrap();
+    session.continue_execution().unwrap();
+    assert_eq!(stopped(&events).0, StopReason::Breakpoint);
+    let child = pid(&dir, "child.pid");
+    let inferior = pid(&dir, "inferior.pid");
+    assert!(!inactive(child) && !inactive(inferior));
+    assert!(dir.join("heartbeat").exists());
+    // Main returns normally while the child continues its heartbeat loop.
+    session.continue_execution().unwrap();
+    let mut exited = false;
+    loop {
+        match event(&events) {
+            DebugEvent::Exited { exit_code, signal } => {
+                assert_eq!(exit_code, Some(0));
+                assert!(signal.is_none());
+                exited = true;
+            }
+            DebugEvent::Finished { outcome } => {
+                assert_eq!(outcome, DebugOutcome::Exited);
+                break;
+            }
+            DebugEvent::Running => {}
+            other => panic!("unexpected natural-exit event {other:?}"),
+        }
+    }
+    assert!(exited);
+    let result = session.wait();
+    assert_eq!(result.outcome, DebugOutcome::Exited);
+    assert_eq!(result.exit_code, Some(0));
+    assert!(result.process_errors.is_empty(), "{result:?}");
+    assert!(inactive(inferior));
+    let retained = !result.cleanup_errors.is_empty();
+    #[cfg(windows)]
+    assert!(!retained, "{result:?}");
+    #[cfg(target_os = "linux")]
+    if retained {
+        match fs::read_to_string(format!("/proc/{child}/stat")) {
+            Ok(stat) => {
+                let state = stat.rsplit_once(')').unwrap().1.trim_start().as_bytes()[0];
+                assert!(matches!(state, b'Z' | b'X'), "descendant still running");
+            }
+            Err(error) => assert_eq!(error.kind(), std::io::ErrorKind::NotFound),
+        }
+        assert!(
+            result
+                .cleanup_errors
+                .iter()
+                .any(|e| e.contains("including exited processes awaiting host reaping"))
+        );
+        assert!(
+            result
+                .cleanup_errors
+                .iter()
+                .any(|e| e.contains("artifact retained"))
+        );
+        eprintln!(
+            "Natural-exit child awaits host reaping; cleanup error and artifact retention verified"
+        );
+    }
+    if !retained {
+        assert!(inactive(child));
+    }
+    let before = fs::read(dir.join("heartbeat")).unwrap();
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(before, fs::read(dir.join("heartbeat")).unwrap());
+    let artifact_dir = result.artifact.directory().to_owned();
+    drop(exit_fixture.artifact);
+    assert!(artifact_dir.exists());
+    drop(result);
+    if retained {
+        assert!(artifact_dir.exists());
+    } else {
+        until(|| !artifact_dir.exists());
+    }
+
     let (session, events) = f.start("overflow");
     session.continue_execution().unwrap();
     // No event reads: both backpressure and output limiting must terminate.

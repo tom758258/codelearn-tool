@@ -100,6 +100,11 @@ int main(int argc, char **argv) {
     } else if (!strcmp(value, "overflow")) {
         unsigned char block[8192]; memset(block, 255, sizeof block);
         for (;;) { fwrite(block, 1, sizeof block, stdout); fwrite(block, 1, sizeof block, stderr); fflush(stdout); fflush(stderr); }
+    } else if (!strcmp(value, "descendant-exit")) {
+        descendant();
+        for (int i = 0; i < 500 && !exists("heartbeat"); i++) tick();
+        if (!exists("heartbeat")) return 82;
+        return 0; /* descendant-return */
     } else if (!strcmp(value, "descendant")) descendant();
     for (unsigned long i = 0; i < 3000; i++) { number("running", i); tick(); }
     return 0;
