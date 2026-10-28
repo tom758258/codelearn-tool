@@ -6,13 +6,13 @@ A Windows and Linux desktop application for learning programming, starting with 
 
 ## Current scope / 目前範圍
 
-The desktop currently displays a minimal welcome window. Its independent Rust Core library provides GCC/GDB discovery and validation, C11 compile/link, supervised program execution, and GDB/MI3 debug session APIs. The Tauri 2 desktop shell uses React, TypeScript, and Vite; these Core features are not connected to the UI yet.
+The Tauri 2 desktop now provides Workspace Settings, Imported/Authored file browsing, file and folder import, Copy to Authored, and New File (`.c`, `.h`, `.txt`). Its independent Rust Core library provides GCC/GDB discovery and validation, C11 compile/link, supervised program execution, and GDB/MI3 debug session APIs; these Core features are not connected to the UI yet.
 
-目前桌面程式仍僅顯示最小歡迎視窗。獨立 Rust Core Library 提供 GCC/GDB 偵測與驗證、C11 編譯／連結、受控程序執行，以及 GDB/MI3 除錯 Session API。桌面外殼採用 Tauri 2、React、TypeScript、Vite；這些 Core 功能尚未串接至 UI。
+Tauri 2 桌面程式現已提供 Workspace Settings、Imported／Authored 檔案瀏覽、單檔與整個資料夾匯入、Copy to Authored，以及 New File（`.c`、`.h`、`.txt`）。獨立 Rust Core Library 提供 GCC/GDB 偵測與驗證、C11 編譯／連結、受控程序執行，以及 GDB/MI3 除錯 Session API；這些 Core 功能尚未串接至 UI。
 
-C editing, toolchain installation, desktop run/debug controls, lessons, and learning progress are **not implemented**. No telemetry, cloud services, or student-data persistence is included.
+C editing/Monaco, toolchain installation, desktop compile/run/debug controls, lessons, and learning progress are **not implemented**. Workspace files and local path preferences persist on this machine. No telemetry, cloud services, or learning-record storage is included.
 
-C 程式編輯、工具鏈安裝、桌面執行／除錯操作、課程及學習進度均**尚未實作**。目前不包含遙測、雲端服務或學生資料儲存。
+C 程式編輯／Monaco、工具鏈安裝、桌面編譯／執行／除錯操作、課程及學習進度均**尚未實作**。Workspace 檔案與本機路徑偏好會保存在這台電腦；不包含遙測、雲端服務或學習紀錄儲存。
 
 Core callers explicitly select an absolute GCC executable path and provide existing, separate Workspace and CodeLearnTemp directories. Selected `.c` files, logical source directories, and include directories must resolve inside the Workspace. Text input is compiled from a private snapshot and may link additional selected `.c` files. GCC is validated by a real compile/link; GDB is checked independently for version/startup only. Discovery suggests usable candidates in explicit-path, PATH, then common-location order and never selects one automatically.
 
@@ -57,6 +57,34 @@ Windows 上，Core 會在可用時採用同一除錯工作目錄既有的短名�
 Debug cleanup uses the existing Windows Job Object; Linux uses an exclusive session and pidfds because GDB creates separate inferior process groups. Linux requires `/proc` and pidfd support (available on the Ubuntu 24.04 target). The host init/reaper must collect orphaned exited processes; Core does not change the application's global subreaper setting. If processes remain after finite cleanup, including zombies awaiting host reaping, cleanup errors are reported and the artifact is retained. This is process supervision, not a sandbox.
 
 除錯清理沿用 Windows Job Object；Linux 因 GDB 會另建 Inferior 程序群組，改用獨立 Session 與 pidfd，需支援 `/proc` 與 pidfd（Ubuntu 24.04 目標具備）。孤兒程序退出後由宿主 Init／Reaper 回收；Core 不改動應用程式的全域 Subreaper 設定。有限清理後若仍有殘留，包含等待宿主回收的 Zombie，會回報清理錯誤並保留 Artifact。此機制是程序管理，不是沙箱。
+
+## Desktop workspace / 桌面工作區
+
+Learning Workspace defaults to `LearningWorkspace` under Tauri's `appDataDir`; CodeLearnTemp defaults to `CodeLearnTemp` under `appCacheDir`. Browse or enter absolute directories, then Apply. The active resolved paths are shown below the inputs. Restore Default stages the default for that path; Apply saves it. JSON preferences live in `workspace-settings.json` under `appConfigDir`, separate from both data roots. Invalid saved settings display an error and can be corrected here; the app does not silently fall back to defaults. Changing roots leaves old files in place and never clears Temp.
+
+Learning Workspace 預設位於 Tauri `appDataDir` 下的 `LearningWorkspace`；CodeLearnTemp 預設位於 `appCacheDir` 下的 `CodeLearnTemp`。可用 Browse 或輸入絕對目錄，再按 Apply；輸入欄下方顯示目前生效的解析路徑。Restore Default 會先將該路徑改回預設選項，按 Apply 才保存。JSON 偏好儲存於 `appConfigDir` 下的 `workspace-settings.json`，與兩個資料根目錄分開。已保存的設定無效時會顯示錯誤，可在此修正，不會默默改用預設。切換目錄保留舊位置的檔案，也不清空 Temp。
+
+Import File/Folder copies all regular files to Imported, preserving the folder structure and the external source. Select an entry and use Copy to Authored to create an independent working copy, retaining its path relative to Imported. Use Open/Up to browse folders; New File creates an empty `.c`, `.h`, or `.txt` in the currently displayed Authored folder. Existing destinations are rejected without overwrite or folder merging. Imports and copies reject symlinks, Windows junctions, and special files; links in existing areas cannot be opened. Workspace and Temp cannot overlap, including through physical path aliases. Operations are serialized and errors are displayed in the window.
+
+Import File／Folder 將所有一般檔案複製至 Imported，保留目錄結構與外部原始檔。選取項目後按 Copy to Authored，即可建立獨立的工作副本，保留相對於 Imported 的路徑。使用 Open／Up 瀏覽資料夾；New File 會在目前顯示的 Authored 資料夾建立空白 `.c`、`.h` 或 `.txt`。既有目的項目會被拒絕，不覆寫或合併資料夾。匯入與複製拒絕 Symlink、Windows Junction 及特殊檔案，既有區域中的連結無法開啟。Workspace 與 Temp 不可重疊，包括實體路徑別名。操作依序處理，錯誤顯示於視窗。
+
+Failed copies attempt to remove only entries created by that operation whose filesystem identities still match. Unexpected entries or cleanup errors are retained and reported. File copies are not transactions; a crash can leave partial data. Path checks do not protect against another process actively replacing entries during an operation.
+
+複製失敗時，僅嘗試移除該次建立、檔案系統身分仍相符的項目；意外新增的內容或無法清理的項目會保留並回報。檔案複製不是交易，崩潰可能留下部分資料；路徑檢查無法防範其他程序在操作期間持續替換檔案項目。
+
+## Main dependencies / 主要依賴
+
+| Component / 元件 | Dependencies and purpose / 依賴與用途 |
+| --- | --- |
+| Desktop UI / 桌面介面 | React, TypeScript, Vite; `@tauri-apps/api` for commands / 呼叫 Commands |
+| Desktop host / 桌面宿主 | Tauri 2; `tauri-plugin-dialog` and `@tauri-apps/plugin-dialog` for native selection / 原生選擇視窗 |
+| Workspace / 工作區 | `serde`, `serde_json` for local preferences; `tempfile` for atomic settings replacement and write probes; `same-file` for cleanup ownership / 本機偏好、原子替換設定與寫入檢查、清理歸屬檢查 |
+| Rust Core direct dependencies / Rust Core 直接依賴 | `same-file`, `tempfile`; Linux `libc`; Windows `windows-sys` for process and filesystem APIs / 程序及檔案系統 API |
+| External toolchains / 外部工具鏈 | GCC and GDB are not bundled or automatically installed / GCC 與 GDB 不隨 Desktop 內建，也不自動安裝 |
+
+Only the dialog open permission is granted. The dialog plugin brings `tauri-plugin-fs` transitively; Desktop does not expose frontend filesystem permissions or use it for workspace operations. Monaco is not included. Exact versions are recorded in the Rust and npm lockfiles.
+
+僅授予 Dialog 開啟權限。Dialog Plugin 間接依賴 `tauri-plugin-fs`；Desktop 未開放前端檔案系統權限，也不用它處理 Workspace 操作。目前未包含 Monaco；確切版本記錄於 Rust 與 npm Lockfile。
 
 ## Repository / 專案結構
 
@@ -127,9 +155,9 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 cargo build --locked --manifest-path src-tauri/Cargo.toml
 ```
 
-Build the frontend before direct Cargo checks of Tauri. No frontend test suite is currently defined. Default Core tests cover path boundaries, artifact cleanup errors (Windows), and compiler process supervision without requiring GCC/GDB. The Windows path-alias test creates temporary junctions and requires an environment permitting that operation.
+Build the frontend before direct Cargo checks of Tauri. No frontend test suite is currently defined. Desktop workspace tests cover persistence, root and link boundaries, import/copy protection, New File restrictions, and failed-copy cleanup using synthetic temporary files. Default Core tests cover path boundaries, artifact cleanup errors (Windows), and compiler process supervision without requiring GCC/GDB. The Windows path-alias test creates temporary junctions and requires an environment permitting that operation.
 
-直接執行 Tauri 的 Cargo 檢查前，請先建置前端。目前未建立前端測試套件。Core 預設測試涵蓋路徑邊界、產物清理錯誤（Windows）及編譯程序管理，不需要 GCC/GDB。Windows 路徑別名測試會建立暫存 Junction，執行環境須允許此操作。
+直接執行 Tauri 的 Cargo 檢查前，請先建置前端。目前未建立前端測試套件。Desktop Workspace 測試使用暫存合成檔案，涵蓋設定保存、根目錄與連結邊界、匯入／複製保護、New File 限制，以及複製失敗清理。Core 預設測試涵蓋路徑邊界、產物清理錯誤（Windows）及編譯程序管理，不需要 GCC/GDB。Windows 路徑別名測試會建立暫存 Junction，執行環境須允許此操作。
 
 Real GCC checks are opt-in: set `CODELEARN_TEST_GCC` to an existing absolute GCC path, then run `cargo test --workspace --locked --test build -- --ignored --nocapture`. Optionally set `CODELEARN_TEST_GDB` to check a real GDB, and `CODELEARN_TEST_REQUIRE_PATH=1` to require the selected GCC to also be discovered through the current PATH. These checks compile synthetic sources without executing the resulting programs. Tools are never installed automatically.
 

@@ -1,0 +1,937 @@
+//! Desktop-owned persistence and file operations. Paths are checked boundaries,
+//! not protection against another process actively replacing filesystem entries.
+use serde::{Deserialize, Serialize};
+use std::{
+    fs::{self, File, Metadata, OpenOptions},
+    io::{self, Write},
+    path::{Component, Path, PathBuf},
+    sync::Mutex,
+};
+
+pub type Result<T> = std::result::Result<T, String>;
+pub struct WorkspaceState(pub Mutex<Workspace>);
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Preferences {
+    pub workspace_root: Option<PathBuf>,
+    pub temp_root: Option<PathBuf>,
+}
+
+#[derive(Clone)]
+struct Roots {
+    workspace: PathBuf,
+    temp: PathBuf,
+}
+
+#[derive(Serialize)]
+pub struct Settings {
+    pub preferences: Preferences,
+    pub default_workspace_root: PathBuf,
+    pub default_temp_root: PathBuf,
+    pub resolved_workspace_root: Option<PathBuf>,
+    pub resolved_temp_root: Option<PathBuf>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+pub enum Area {
+    Imported,
+    Authored,
+}
+
+impl Area {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Imported => "Imported",
+            Self::Authored => "Authored",
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct Entry {
+    name: String,
+    relative_path: String,
+    is_directory: bool,
+    blocked: bool,
+}
+
+pub struct Workspace {
+    config_file: PathBuf,
+    default_workspace: PathBuf,
+    default_temp: PathBuf,
+    preferences: Preferences,
+    active: Result<Roots>,
+}
+
+impl Workspace {
+    pub fn load(config_file: PathBuf, default_workspace: PathBuf, default_temp: PathBuf) -> Self {
+        let loaded = match fs::read(&config_file) {
+            Ok(bytes) => {
+                serde_json::from_slice(&bytes).map_err(|e| format!("Invalid settings: {e}"))
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Preferences::default()),
+            Err(e) => Err(format!("Cannot read settings: {e}")),
+        };
+        let mut workspace = Self {
+            config_file,
+            default_workspace,
+            default_temp,
+            preferences: Preferences::default(),
+            active: Err("Workspace is not ready".into()),
+        };
+        workspace.active = loaded.and_then(|preferences| {
+            workspace.preferences = preferences;
+            workspace.prepare(&workspace.preferences)
+        });
+        workspace
+    }
+
+    pub fn settings(&self) -> Settings {
+        Settings {
+            preferences: self.preferences.clone(),
+            default_workspace_root: self.default_workspace.clone(),
+            default_temp_root: self.default_temp.clone(),
+            resolved_workspace_root: self.active.as_ref().ok().map(|r| r.workspace.clone()),
+            resolved_temp_root: self.active.as_ref().ok().map(|r| r.temp.clone()),
+            error: self.active.as_ref().err().cloned(),
+        }
+    }
+
+    fn prepare(&self, preferences: &Preferences) -> Result<Roots> {
+        let workspace = resolve_directory(
+            preferences
+                .workspace_root
+                .as_deref()
+                .unwrap_or(&self.default_workspace),
+        )?;
+        let temp = resolve_directory(
+            preferences
+                .temp_root
+                .as_deref()
+                .unwrap_or(&self.default_temp),
+        )?;
+        separate(&workspace, &temp)?;
+        // Neither data root may contain the application's settings file.
+        let config_parent =
+            resolve_directory(self.config_file.parent().ok_or("Invalid settings path")?)?;
+        if contains_path(&workspace, &config_parent)? || contains_path(&temp, &config_parent)? {
+            return Err("Data roots cannot contain the application settings directory".into());
+        }
+        for path in [&workspace, &temp] {
+            fs::create_dir_all(path)
+                .map_err(|e| format!("Cannot create {}: {e}", path.display()))?;
+            writable(path)?;
+        }
+        // Check again after creation, using actual filesystem paths.
+        let workspace = canonical(&workspace)?;
+        let temp = canonical(&temp)?;
+        separate(&workspace, &temp)?;
+        for area in [Area::Imported, Area::Authored] {
+            let path = workspace.join(area.name());
+            match fs::create_dir(&path) {
+                Ok(()) => (),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (),
+                Err(e) => return Err(format!("Cannot initialize {}: {e}", path.display())),
+            }
+            safe_directory(&path)?;
+            writable(&path)?;
+        }
+        Ok(Roots { workspace, temp })
+    }
+
+    pub fn apply(&mut self, preferences: Preferences) -> Result<Settings> {
+        let roots = self.prepare(&preferences)?;
+        let parent = self.config_file.parent().ok_or("Invalid settings path")?;
+        fs::create_dir_all(parent).map_err(|e| format!("Cannot create settings directory: {e}"))?;
+        let mut file = tempfile::NamedTempFile::new_in(parent)
+            .map_err(|e| format!("Cannot save settings: {e}"))?;
+        serde_json::to_writer_pretty(&mut file, &preferences)
+            .map_err(|e| format!("Cannot encode settings: {e}"))?;
+        file.write_all(b"\n")
+            .and_then(|()| file.as_file().sync_all())
+            .map_err(|e| format!("Cannot save settings: {e}"))?;
+        // Same-directory atomic replacement works on Windows and Linux. The old
+        // active roots and settings remain intact if persistence fails.
+        file.persist(&self.config_file)
+            .map_err(|e| format!("Cannot replace settings: {e}"))?;
+        self.preferences = preferences;
+        self.active = Ok(roots);
+        Ok(self.settings())
+    }
+
+    fn area(&self, area: Area) -> Result<PathBuf> {
+        let roots = self.active.as_ref().map_err(Clone::clone)?;
+        let workspace = canonical(&roots.workspace)?;
+        let temp = canonical(&roots.temp)?;
+        if workspace != roots.workspace || temp != roots.temp {
+            return Err("Workspace or Temp changed; apply settings again".into());
+        }
+        separate(&workspace, &temp)?;
+        let path = workspace.join(area.name());
+        checked_path(&workspace, Path::new(area.name()))?;
+        safe_directory(&path)?;
+        Ok(path)
+    }
+
+    pub fn list(&self, area: Area, relative: &str) -> Result<Vec<Entry>> {
+        let root = self.area(area)?;
+        let path = checked_path(&root, &relative_path(relative, true)?)?;
+        safe_directory(&path)?;
+        let mut entries = Vec::new();
+        for item in fs::read_dir(&path).map_err(|e| format!("Cannot list directory: {e}"))? {
+            let item = item.map_err(|e| format!("Cannot read entry: {e}"))?;
+            let name = item
+                .file_name()
+                .into_string()
+                .map_err(|_| "A filename cannot be represented as Unicode")?;
+            let metadata = fs::symlink_metadata(item.path())
+                .map_err(|e| format!("Cannot inspect entry: {e}"))?;
+            let blocked = is_link(&metadata) || !(metadata.is_file() || metadata.is_dir());
+            entries.push(Entry {
+                relative_path: if relative.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{relative}/{name}")
+                },
+                name,
+                is_directory: metadata.is_dir() && !blocked,
+                blocked,
+            });
+        }
+        entries.sort_by(|a, b| {
+            b.is_directory
+                .cmp(&a.is_directory)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        Ok(entries)
+    }
+
+    pub fn import(&self, source: PathBuf) -> Result<()> {
+        if !source.is_absolute() {
+            return Err("Import source must be an absolute path".into());
+        }
+        check_absolute_chain(&source)?;
+        let source = canonical(&source)?;
+        let destination_root = self.area(Area::Imported)?;
+        // Check physical ancestry before scanning: importing a parent of the
+        // destination would otherwise recursively import the copy itself.
+        if contains_path(&source, &destination_root)? {
+            return Err("Import source cannot contain Imported".into());
+        }
+        let name = source.file_name().ok_or("Import source must have a name")?;
+        let destination = destination_root.join(name);
+        copy_new(&source, &destination)
+    }
+
+    pub fn copy_to_authored(&self, relative: &str) -> Result<()> {
+        let relative = relative_path(relative, false)?;
+        let imported = self.area(Area::Imported)?;
+        let source = checked_path(&imported, &relative)?;
+        scan_source(&source)?;
+        let authored = self.area(Area::Authored)?;
+        let mut created = Vec::new();
+        let result = (|| {
+            let mut parent = authored.clone();
+            if let Some(parts) = relative.parent() {
+                for part in parts.components() {
+                    parent.push(part);
+                    match fs::symlink_metadata(&parent) {
+                        Ok(_) => safe_directory(&parent)?,
+                        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                            create_directory(&parent, &mut created)?
+                        }
+                        Err(e) => return Err(format!("Cannot inspect destination: {e}")),
+                    }
+                }
+            }
+            copy_entry(&source, &authored.join(&relative), &mut created)
+        })();
+        finish_copy(result, created)
+    }
+
+    pub fn create_file(&self, parent: &str, filename: &str) -> Result<()> {
+        validate_filename(filename)?;
+        let root = self.area(Area::Authored)?;
+        let parent = checked_path(&root, &relative_path(parent, true)?)?;
+        safe_directory(&parent)?;
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(parent.join(filename))
+            .map_err(|e| {
+                format!("Cannot create file (existing names are never overwritten): {e}")
+            })?;
+        Ok(())
+    }
+}
+
+fn canonical(path: &Path) -> Result<PathBuf> {
+    fs::canonicalize(path).map_err(|e| format!("Cannot resolve {}: {e}", path.display()))
+}
+
+// Resolve through the nearest existing ancestor so overlap is detected before
+// creating missing directories, including roots selected through aliases.
+fn resolve_directory(path: &Path) -> Result<PathBuf> {
+    if !path.is_absolute() || path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err("Choose an absolute directory without '..'".into());
+    }
+    let mut existing = path;
+    let mut missing = Vec::new();
+    loop {
+        match fs::symlink_metadata(existing) {
+            Ok(_) => break,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                missing.push(existing.file_name().ok_or("Invalid directory")?.to_owned());
+                existing = existing.parent().ok_or("Invalid directory")?;
+            }
+            Err(e) => return Err(format!("Cannot inspect directory: {e}")),
+        }
+    }
+    let mut resolved = canonical(existing)?;
+    if !resolved.is_dir() {
+        return Err("Selected path is not a directory".into());
+    }
+    for part in missing.into_iter().rev() {
+        resolved.push(part);
+    }
+    Ok(resolved)
+}
+
+fn separate(workspace: &Path, temp: &Path) -> Result<()> {
+    if contains_path(workspace, temp)? || contains_path(temp, workspace)? {
+        return Err(
+            "Workspace and CodeLearnTemp must be separate, non-overlapping directories".into(),
+        );
+    }
+    Ok(())
+}
+
+// Compare existing ancestor identities as well as canonical components. Windows
+// can spell the same directory with different case or an existing short name.
+fn contains_path(parent: &Path, child: &Path) -> Result<bool> {
+    if child.starts_with(parent) {
+        return Ok(true);
+    }
+    let identity = match same_file::Handle::from_path(parent) {
+        Ok(identity) => identity,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(format!("Cannot identify directory: {e}")),
+    };
+    for ancestor in child.ancestors() {
+        match same_file::Handle::from_path(ancestor) {
+            Ok(candidate) if candidate == identity => return Ok(true),
+            Ok(_) => (),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => (),
+            Err(e) => return Err(format!("Cannot identify ancestor: {e}")),
+        }
+    }
+    Ok(false)
+}
+
+fn writable(path: &Path) -> Result<()> {
+    let probe = tempfile::NamedTempFile::new_in(path)
+        .map_err(|e| format!("Directory is not writable ({}): {e}", path.display()))?;
+    probe
+        .close()
+        .map_err(|e| format!("Cannot remove write probe in {}: {e}", path.display()))
+}
+
+fn is_link(metadata: &Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        // FILE_ATTRIBUTE_REPARSE_POINT includes junctions, not only symlinks.
+        metadata.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.file_type().is_symlink()
+    }
+}
+
+fn safe_metadata(path: &Path) -> Result<Metadata> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|e| format!("Cannot inspect {}: {e}", path.display()))?;
+    if is_link(&metadata) || !(metadata.is_file() || metadata.is_dir()) {
+        return Err(format!(
+            "Symlinks, junctions and special files are not allowed: {}",
+            path.display()
+        ));
+    }
+    Ok(metadata)
+}
+
+fn safe_directory(path: &Path) -> Result<()> {
+    if !safe_metadata(path)?.is_dir() {
+        return Err(format!("Not a directory: {}", path.display()));
+    }
+    Ok(())
+}
+
+fn relative_path(value: &str, allow_empty: bool) -> Result<PathBuf> {
+    // Apply the same boundary on both targets, including Windows drive/ADS syntax.
+    if (value.is_empty() && !allow_empty)
+        || value.contains(['\\', ':'])
+        || value.starts_with('/')
+        || (!value.is_empty()
+            && value
+                .split('/')
+                .any(|p| p.is_empty() || p == "." || p == ".."))
+    {
+        return Err("Expected a relative path inside the selected workspace area".into());
+    }
+    let path = PathBuf::from(value);
+    if path
+        .components()
+        .any(|c| !matches!(c, Component::Normal(_)))
+    {
+        return Err("Invalid relative path".into());
+    }
+    Ok(path)
+}
+
+fn checked_path(root: &Path, relative: &Path) -> Result<PathBuf> {
+    check_absolute_chain(root)?;
+    let mut path = root.to_path_buf();
+    for component in relative.components() {
+        if !matches!(component, Component::Normal(_)) {
+            return Err("Invalid relative path".into());
+        }
+        path.push(component);
+        safe_metadata(&path)?;
+    }
+    if !canonical(&path)?.starts_with(canonical(root)?) {
+        return Err("Path escapes the workspace area".into());
+    }
+    Ok(path)
+}
+
+fn check_absolute_chain(path: &Path) -> Result<()> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => current.push(component),
+            Component::Normal(_) => {
+                current.push(component);
+                safe_metadata(&current)?;
+            }
+            _ => return Err("Path cannot contain '.' or '..'".into()),
+        }
+    }
+    Ok(())
+}
+
+fn validate_filename(name: &str) -> Result<()> {
+    if name.trim().is_empty()
+        || name.ends_with([' ', '.'])
+        || name
+            .chars()
+            .any(|c| c.is_control() || "<>:\"/\\|?*".contains(c))
+    {
+        return Err("Invalid filename".into());
+    }
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim_end()
+        .to_uppercase();
+    if ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"].contains(&stem.as_str())
+        || ["COM", "LPT"].iter().any(|prefix| {
+            stem.strip_prefix(prefix).is_some_and(|n| {
+                n.len() == 1 && matches!(n.as_bytes()[0], b'1'..=b'9')
+                    || ["¹", "²", "³"].contains(&n)
+            })
+        })
+    {
+        return Err("Windows reserved filenames are not allowed".into());
+    }
+    if !matches!(
+        Path::new(name).extension().and_then(|e| e.to_str()),
+        Some("c" | "h" | "txt")
+    ) {
+        return Err("New File supports only .c, .h and .txt".into());
+    }
+    Ok(())
+}
+
+fn scan_source(path: &Path) -> Result<()> {
+    if safe_metadata(path)?.is_dir() {
+        for child in fs::read_dir(path).map_err(|e| format!("Cannot inspect source folder: {e}"))? {
+            scan_source(
+                &child
+                    .map_err(|e| format!("Cannot inspect source entry: {e}"))?
+                    .path(),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+// Keep identities for only the entries this operation created. Rollback never
+// recursively removes a tree: unexpected entries prevent removing its directory.
+struct Created {
+    path: PathBuf,
+    identity: same_file::Handle,
+    directory: bool,
+}
+
+fn create_directory(path: &Path, created: &mut Vec<Created>) -> Result<()> {
+    fs::create_dir(path)
+        .map_err(|e| format!("Cannot create directory (existing names are never merged): {e}"))?;
+    created.push(Created {
+        path: path.into(),
+        identity: same_file::Handle::from_path(path).map_err(|e| {
+            format!(
+                "Cannot identify new directory {} (retained): {e}",
+                path.display()
+            )
+        })?,
+        directory: true,
+    });
+    Ok(())
+}
+
+fn copy_new(source: &Path, destination: &Path) -> Result<()> {
+    scan_source(source)?; // Reject an entire linked tree before creating anything.
+    let mut created = Vec::new();
+    let result = copy_entry(source, destination, &mut created);
+    finish_copy(result, created)
+}
+
+fn copy_entry(source: &Path, destination: &Path, created: &mut Vec<Created>) -> Result<()> {
+    check_absolute_chain(source)?;
+    check_absolute_chain(destination.parent().ok_or("Invalid destination")?)?;
+    if safe_metadata(source)?.is_dir() {
+        create_directory(destination, created)?;
+        for child in fs::read_dir(source).map_err(|e| format!("Cannot read source: {e}"))? {
+            let child = child.map_err(|e| format!("Cannot read source entry: {e}"))?;
+            copy_entry(&child.path(), &destination.join(child.file_name()), created)?;
+        }
+    } else {
+        let mut input = File::open(source).map_err(|e| format!("Cannot open source: {e}"))?;
+        // Recheck after open to reject a source replaced by a link/special file.
+        if !safe_metadata(source)?.is_file()
+            || !input.metadata().map_err(|e| e.to_string())?.is_file()
+        {
+            return Err("Source changed while copying".into());
+        }
+        let opened = input
+            .try_clone()
+            .and_then(same_file::Handle::from_file)
+            .map_err(|e| format!("Cannot identify source: {e}"))?;
+        if opened != same_file::Handle::from_path(source).map_err(|e| e.to_string())? {
+            return Err("Source changed while copying".into());
+        }
+        let mut output = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(destination)
+            .map_err(|e| format!("Cannot copy (existing names are never overwritten): {e}"))?;
+        let identity = output
+            .try_clone()
+            .and_then(same_file::Handle::from_file)
+            .map_err(|e| {
+                format!(
+                    "Cannot identify new file {} (retained): {e}",
+                    destination.display()
+                )
+            })?;
+        created.push(Created {
+            path: destination.into(),
+            identity,
+            directory: false,
+        });
+        io::copy(&mut input, &mut output).map_err(|e| format!("Copy failed: {e}"))?;
+        output
+            .flush()
+            .map_err(|e| format!("Cannot finish copy: {e}"))?;
+    }
+    Ok(())
+}
+
+fn finish_copy(result: Result<()>, created: Vec<Created>) -> Result<()> {
+    let Err(mut error) = result else {
+        return Ok(());
+    };
+    for item in created.into_iter().rev() {
+        let cleanup = (|| {
+            check_absolute_chain(&item.path)?;
+            let current = same_file::Handle::from_path(&item.path).map_err(|e| e.to_string())?;
+            if current != item.identity {
+                return Err("entry identity changed; retained".into());
+            }
+            if item.directory {
+                fs::remove_dir(&item.path)
+            } else {
+                fs::remove_file(&item.path)
+            }
+            .map_err(|e| e.to_string())
+        })();
+        if let Err(e) = cleanup {
+            error.push_str(&format!(
+                "; cleanup failed for {}: {e}",
+                item.path.display()
+            ));
+        }
+    }
+    Err(error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture() -> (tempfile::TempDir, Workspace) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let workspace = Workspace::load(
+            root.join("config/settings.json"),
+            root.join("workspace"),
+            root.join("temp"),
+        );
+        assert!(workspace.active.is_ok());
+        (dir, workspace)
+    }
+
+    #[test]
+    fn settings_preserve_data_across_switch_restart_and_failed_save() {
+        let (_dir, mut workspace) = fixture();
+        let original = workspace.active.as_ref().unwrap().clone();
+        fs::write(
+            original.workspace.join("Authored/keep.c"),
+            b"private synthetic data",
+        )
+        .unwrap();
+        fs::write(original.temp.join("keep.txt"), b"temp data").unwrap();
+        let preferences = Preferences {
+            workspace_root: Some(original.workspace.with_file_name("custom")),
+            temp_root: Some(original.temp.with_file_name("custom-temp")),
+        };
+        workspace.apply(preferences.clone()).unwrap();
+        let reloaded = Workspace::load(
+            workspace.config_file.clone(),
+            workspace.default_workspace.clone(),
+            workspace.default_temp.clone(),
+        );
+        assert_eq!(
+            reloaded.active.unwrap().workspace,
+            preferences.workspace_root.unwrap()
+        );
+        let saved = fs::read(&workspace.config_file).unwrap();
+        assert!(
+            workspace
+                .apply(Preferences {
+                    workspace_root: Some(original.temp.clone()),
+                    temp_root: Some(original.temp.join("nested"))
+                })
+                .is_err()
+        );
+        assert_eq!(fs::read(&workspace.config_file).unwrap(), saved);
+        // A settings destination that cannot be replaced must keep active roots.
+        let active = workspace.active.as_ref().unwrap().workspace.clone();
+        fs::remove_file(&workspace.config_file).unwrap();
+        fs::create_dir(&workspace.config_file).unwrap();
+        assert!(workspace.apply(Preferences::default()).is_err());
+        assert_eq!(workspace.active.as_ref().unwrap().workspace, active);
+        fs::remove_dir(&workspace.config_file).unwrap();
+        workspace.apply(Preferences::default()).unwrap();
+        assert_eq!(
+            workspace.active.as_ref().unwrap().workspace,
+            original.workspace
+        );
+        assert_eq!(
+            fs::read(original.workspace.join("Authored/keep.c")).unwrap(),
+            b"private synthetic data"
+        );
+        assert_eq!(
+            fs::read(original.temp.join("keep.txt")).unwrap(),
+            b"temp data"
+        );
+        assert!(workspace.settings().preferences.workspace_root.is_none());
+    }
+
+    #[test]
+    fn invalid_roots_and_saved_settings_are_reported_without_fallback() {
+        let (_dir, mut workspace) = fixture();
+        let root = workspace.default_workspace.clone();
+        for temp in [
+            root.clone(),
+            root.join("nested"),
+            root.parent().unwrap().to_path_buf(),
+        ] {
+            assert!(
+                workspace
+                    .apply(Preferences {
+                        workspace_root: Some(root.clone()),
+                        temp_root: Some(temp)
+                    })
+                    .is_err()
+            );
+        }
+        // A sibling with the same string prefix is a separate directory.
+        workspace
+            .apply(Preferences {
+                workspace_root: Some(root.clone()),
+                temp_root: Some(root.with_file_name("workspace-backup")),
+            })
+            .unwrap();
+        let file = root.join("file.txt");
+        fs::write(&file, b"keep").unwrap();
+        assert!(
+            workspace
+                .apply(Preferences {
+                    workspace_root: Some(file.clone()),
+                    temp_root: None
+                })
+                .is_err()
+        );
+        assert!(
+            workspace
+                .apply(Preferences {
+                    workspace_root: Some(root.join("../escape")),
+                    temp_root: None
+                })
+                .is_err()
+        );
+        fs::write(
+            &workspace.config_file,
+            serde_json::to_vec(&Preferences {
+                workspace_root: Some(file),
+                temp_root: None,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let reload = Workspace::load(
+            workspace.config_file.clone(),
+            workspace.default_workspace.clone(),
+            workspace.default_temp.clone(),
+        );
+        assert!(reload.settings().error.is_some());
+        assert!(reload.settings().resolved_workspace_root.is_none());
+        assert!(reload.list(Area::Imported, "").is_err());
+        let saved = fs::read(&workspace.config_file).unwrap();
+        assert!(!saved.is_empty());
+        fs::write(&workspace.config_file, b"invalid JSON").unwrap();
+        let reload = Workspace::load(
+            workspace.config_file.clone(),
+            workspace.default_workspace.clone(),
+            workspace.default_temp.clone(),
+        );
+        assert!(reload.settings().error.is_some());
+        assert_eq!(fs::read(&workspace.config_file).unwrap(), b"invalid JSON");
+        #[cfg(target_os = "linux")]
+        assert!(writable(Path::new("/proc")).is_err());
+    }
+
+    #[test]
+    fn imports_and_authored_copies_preserve_contents_structure_and_existing_targets() {
+        let (dir, workspace) = fixture();
+        let project = fs::canonicalize(dir.path()).unwrap().join("Example");
+        fs::create_dir_all(project.join("include")).unwrap();
+        for name in ["main.c", "include/math.h", "data.txt", "image.png"] {
+            fs::write(project.join(name), format!("synthetic {name}")).unwrap();
+        }
+        let single = project.with_file_name("single.bin");
+        fs::write(&single, b"single").unwrap();
+        workspace.import(single.clone()).unwrap();
+        workspace.import(project.clone()).unwrap();
+        assert!(workspace.import(project.clone()).is_err());
+        let imported = workspace.area(Area::Imported).unwrap();
+        let authored = workspace.area(Area::Authored).unwrap();
+        assert_eq!(workspace.list(Area::Imported, "Example").unwrap().len(), 4);
+        assert!(workspace.import(imported.clone()).is_err());
+        assert!(
+            workspace
+                .import(imported.parent().unwrap().to_path_buf())
+                .is_err()
+        );
+        workspace
+            .copy_to_authored("Example/include/math.h")
+            .unwrap();
+        assert!(
+            workspace
+                .copy_to_authored("Example/include/math.h")
+                .is_err()
+        );
+        assert!(workspace.copy_to_authored("Example").is_err()); // no merge
+        workspace.copy_to_authored("single.bin").unwrap();
+        fs::write(authored.join("Example/include/math.h"), b"edited copy").unwrap();
+        assert_eq!(
+            fs::read(imported.join("Example/include/math.h")).unwrap(),
+            b"synthetic include/math.h"
+        );
+        // A whole folder copy to a new name still preserves every regular file.
+        let other = project.with_file_name("Other");
+        fs::create_dir(&other).unwrap();
+        fs::write(other.join("image.png"), b"image").unwrap();
+        workspace.import(other).unwrap();
+        workspace.copy_to_authored("Other").unwrap();
+        assert_eq!(
+            fs::read(authored.join("Other/image.png")).unwrap(),
+            b"image"
+        );
+        assert_eq!(
+            fs::read(project.join("main.c")).unwrap(),
+            b"synthetic main.c"
+        );
+        assert_eq!(
+            fs::read(imported.join("Example/image.png")).unwrap(),
+            b"synthetic image.png"
+        );
+        assert_eq!(fs::read(single).unwrap(), b"single");
+    }
+
+    #[test]
+    fn new_file_and_relative_operations_enforce_authored_boundaries() {
+        let (_dir, workspace) = fixture();
+        let authored = workspace.area(Area::Authored).unwrap();
+        fs::create_dir(authored.join("nested")).unwrap();
+        for name in ["hello.c", "math.h", "data.txt"] {
+            workspace.create_file("nested", name).unwrap();
+            assert!(
+                fs::read(authored.join("nested").join(name))
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(workspace.create_file("nested", name).is_err());
+        }
+        for name in [
+            "",
+            " ",
+            "../hello.c",
+            "folder/hello.c",
+            "folder\\hello.c",
+            "hello.exe",
+            "CON.c",
+            "nul.txt",
+            "COM1.h",
+            "LPT¹.c",
+            "trailing.c ",
+            "bad:.c",
+            ".",
+            "..",
+        ] {
+            assert!(workspace.create_file("", name).is_err(), "accepted {name}");
+        }
+        for path in [
+            "../Imported",
+            "/tmp",
+            "C:\\temp",
+            "nested/..",
+            "nested//child",
+        ] {
+            assert!(workspace.create_file(path, "bad.c").is_err());
+            assert!(workspace.copy_to_authored(path).is_err());
+            assert!(workspace.list(Area::Authored, path).is_err());
+        }
+        assert!(workspace.create_file("missing", "bad.c").is_err());
+        fs::write(authored.join("existing.c"), b"keep").unwrap();
+        assert!(workspace.create_file("", "existing.c").is_err());
+        assert_eq!(fs::read(authored.join("existing.c")).unwrap(), b"keep");
+    }
+
+    #[cfg(any(unix, windows))]
+    fn directory_link(target: &Path, link: &Path) {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).unwrap();
+        #[cfg(windows)]
+        assert!(
+            std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    #[test]
+    #[cfg(any(unix, windows))]
+    fn links_and_junctions_cannot_bypass_import_copy_or_root_boundaries() {
+        let (dir, mut workspace) = fixture();
+        let base = fs::canonicalize(dir.path()).unwrap();
+        let root = workspace.default_workspace.clone();
+        let alias = base.join("alias");
+        directory_link(&root, &alias);
+        assert!(
+            workspace
+                .apply(Preferences {
+                    workspace_root: Some(root.clone()),
+                    temp_root: Some(alias.join("cache"))
+                })
+                .is_err()
+        );
+        let source = base.join("LinkedProject");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("normal.c"), b"keep").unwrap();
+        directory_link(&root, &source.join("link"));
+        assert!(workspace.import(source).is_err());
+        assert!(!root.join("Imported/LinkedProject").exists());
+        let imported = workspace.area(Area::Imported).unwrap();
+        directory_link(&root, &imported.join("link"));
+        assert!(workspace.copy_to_authored("link").is_err());
+        assert!(workspace.list(Area::Imported, "link").is_err());
+        assert!(
+            workspace
+                .list(Area::Imported, "")
+                .unwrap()
+                .iter()
+                .any(|e| e.name == "link" && e.blocked)
+        );
+        let authored = workspace.area(Area::Authored).unwrap();
+        directory_link(&root, &authored.join("link"));
+        assert!(workspace.create_file("link", "bad.c").is_err());
+        let other = base.join("Other");
+        fs::create_dir(&other).unwrap();
+        // Existing area roots must also reject links during startup.
+        let unsafe_root = base.join("unsafe-workspace");
+        fs::create_dir(&unsafe_root).unwrap();
+        directory_link(&other, &unsafe_root.join("Imported"));
+        assert!(
+            workspace
+                .apply(Preferences {
+                    workspace_root: Some(unsafe_root),
+                    temp_root: None
+                })
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn failed_copy_cleanup_removes_only_identified_new_entries_and_reports_retained_data() {
+        let (dir, _workspace) = fixture();
+        let base = fs::canonicalize(dir.path()).unwrap();
+        let destination = base.join("partial");
+        let mut created = Vec::new();
+        create_directory(&destination, &mut created).unwrap();
+        let source = base.join("source.txt");
+        fs::write(&source, b"synthetic").unwrap();
+        copy_entry(&source, &destination.join("owned.txt"), &mut created).unwrap();
+        // A real destination collision aborts without overwriting its contents.
+        fs::write(destination.join("foreign.txt"), b"keep").unwrap();
+        let result = copy_entry(&source, &destination.join("foreign.txt"), &mut created);
+        let error = finish_copy(result, created).unwrap_err();
+        assert!(error.contains("cleanup failed"));
+        assert!(!destination.join("owned.txt").exists());
+        assert_eq!(fs::read(destination.join("foreign.txt")).unwrap(), b"keep");
+        let mut created = Vec::new();
+        let empty = base.join("empty-partial");
+        create_directory(&empty, &mut created).unwrap();
+        assert!(finish_copy(Err("copy failed".into()), created).is_err());
+        assert!(!empty.exists());
+        let mut created = Vec::new();
+        let replaced = base.join("replaced.txt");
+        copy_entry(&source, &replaced, &mut created).unwrap();
+        fs::rename(&replaced, base.join("moved.txt")).unwrap();
+        fs::write(&replaced, b"replacement").unwrap();
+        let error = finish_copy(Err("copy failed".into()), created).unwrap_err();
+        assert!(error.contains("identity changed"));
+        assert_eq!(fs::read(replaced).unwrap(), b"replacement");
+        assert_eq!(fs::read(source).unwrap(), b"synthetic");
+    }
+}
