@@ -16,8 +16,9 @@ type Settings = {
   error: string | null
 }
 type Entry = { name: string; relative_path: string; is_directory: boolean; blocked: boolean }
-type Listing = { path: string; entries: Entry[]; selected: string | null }
-const emptyListing = (): Listing => ({ path: '', entries: [], selected: null })
+type Listing = { path: string; displayPath: string; entries: Entry[]; selected: string | null }
+type DirectoryEntries = { display_path: string; entries: Entry[] }
+const emptyListing = (): Listing => ({ path: '', displayPath: '', entries: [], selected: null })
 
 function App() {
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -33,9 +34,9 @@ function App() {
 
   async function readListing(area: Area, path: string) {
     const setListing = area === 'Imported' ? setImported : setAuthored
-    setListing({ path, entries: [], selected: null })
-    const entries = await invoke<Entry[]>('list_workspace_entries', { area, relativePath: path })
-    setListing({ path, entries, selected: null })
+    setListing({ path, displayPath: '', entries: [], selected: null })
+    const result = await invoke<DirectoryEntries>('list_workspace_entries', { area, relativePath: path })
+    setListing({ path, displayPath: result.display_path, entries: result.entries, selected: null })
   }
 
   async function refresh(importedPath = imported.path, authoredPath = authored.path) {
@@ -92,7 +93,7 @@ function App() {
         <div className="panel-title"><h3>{area}</h3><span>{area === 'Imported' ? 'Original copies' : 'Your working files'}</span></div>
         <div className="directory-bar">
           <button disabled={busy || !ready || !listing.path} onClick={() => void perform(() => readListing(area, listing.path.split('/').slice(0, -1).join('/')))}>Up</button>
-          <code>{area}/{listing.path}</code>
+          <code>{area}/{listing.displayPath}</code>
         </div>
         <ul className="entries" aria-label={`${area} entries`}>
           {listing.entries.map(entry => (

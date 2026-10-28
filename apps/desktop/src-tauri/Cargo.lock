@@ -337,6 +337,7 @@ name = "codelearn-tool-desktop"
 version = "0.1.0"
 dependencies = [
  "codelearn-tool-core",
+ "percent-encoding",
  "same-file",
  "serde",
  "serde_json",

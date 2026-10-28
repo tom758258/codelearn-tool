@@ -5,7 +5,7 @@ mod workspace;
 use codelearn_tool_core as _;
 use std::{path::PathBuf, sync::Mutex};
 use tauri::Manager;
-use workspace::{Area, Entry, Preferences, Result, Settings, Workspace, WorkspaceState};
+use workspace::{Area, Listing, Preferences, Result, Settings, Workspace, WorkspaceState};
 
 async fn with_workspace<T: Send + 'static>(
     app: tauri::AppHandle,
@@ -41,7 +41,7 @@ async fn list_workspace_entries(
     app: tauri::AppHandle,
     area: Area,
     relative_path: String,
-) -> Result<Vec<Entry>> {
+) -> Result<Listing> {
     with_workspace(app, move |workspace| workspace.list(area, &relative_path)).await
 }
 

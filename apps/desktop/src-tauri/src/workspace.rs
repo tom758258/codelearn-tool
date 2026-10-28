@@ -1,7 +1,9 @@
 //! Desktop-owned persistence and file operations. Paths are checked boundaries,
 //! not protection against another process actively replacing filesystem entries.
+use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, percent_encode};
 use serde::{Deserialize, Serialize};
 use std::{
+    ffi::OsString,
     fs::{self, File, Metadata, OpenOptions},
     io::{self, Write},
     path::{Component, Path, PathBuf},
@@ -55,6 +57,12 @@ pub struct Entry {
     relative_path: String,
     is_directory: bool,
     blocked: bool,
+}
+
+#[derive(Serialize)]
+pub struct Listing {
+    display_path: String,
+    entries: Vec<Entry>,
 }
 
 pub struct Workspace {
@@ -175,27 +183,39 @@ impl Workspace {
         Ok(path)
     }
 
-    pub fn list(&self, area: Area, relative: &str) -> Result<Vec<Entry>> {
+    pub fn list(&self, area: Area, relative: &str) -> Result<Listing> {
         let root = self.area(area)?;
-        let path = checked_path(&root, &relative_path(relative, true)?)?;
+        let relative_path = relative_path(relative, true)?;
+        let path = checked_path(&root, &relative_path)?;
         safe_directory(&path)?;
         let mut entries = Vec::new();
         for item in fs::read_dir(&path).map_err(|e| format!("Cannot list directory: {e}"))? {
             let item = item.map_err(|e| format!("Cannot read entry: {e}"))?;
-            let name = item
-                .file_name()
-                .into_string()
-                .map_err(|_| "A filename cannot be represented as Unicode")?;
+            let native_name = item.file_name();
+            #[cfg(unix)]
+            let bytes = {
+                use std::os::unix::ffi::OsStrExt;
+                native_name.as_bytes()
+            };
+            #[cfg(not(unix))]
+            let bytes = native_name
+                .to_str()
+                .ok_or("A filename cannot be represented as Unicode")?
+                .as_bytes();
+            // Keep the original filename bytes in command arguments. The
+            // display name can contain replacement characters without changing
+            // which file is opened or copied, even when two names look alike.
+            let component = percent_encode(bytes, NON_ALPHANUMERIC).to_string();
             let metadata = fs::symlink_metadata(item.path())
                 .map_err(|e| format!("Cannot inspect entry: {e}"))?;
             let blocked = is_link(&metadata) || !(metadata.is_file() || metadata.is_dir());
             entries.push(Entry {
                 relative_path: if relative.is_empty() {
-                    name.clone()
+                    component
                 } else {
-                    format!("{relative}/{name}")
+                    format!("{relative}/{component}")
                 },
-                name,
+                name: native_name.to_string_lossy().into_owned(),
                 is_directory: metadata.is_dir() && !blocked,
                 blocked,
             });
@@ -205,7 +225,10 @@ impl Workspace {
                 .cmp(&a.is_directory)
                 .then_with(|| a.name.cmp(&b.name))
         });
-        Ok(entries)
+        Ok(Listing {
+            display_path: relative_path.to_string_lossy().into_owned(),
+            entries,
+        })
     }
 
     pub fn import(&self, source: PathBuf) -> Result<()> {
@@ -274,7 +297,14 @@ fn canonical(path: &Path) -> Result<PathBuf> {
 // Resolve through the nearest existing ancestor so overlap is detected before
 // creating missing directories, including roots selected through aliases.
 fn resolve_directory(path: &Path) -> Result<PathBuf> {
-    if !path.is_absolute() || path.components().any(|c| matches!(c, Component::ParentDir)) {
+    // Windows verbatim components do not treat '/' as a separator. Inspect
+    // both separator spellings before filesystem access, including mixed paths.
+    let has_parent = path
+        .as_os_str()
+        .as_encoded_bytes()
+        .split(|byte| *byte == b'/' || (cfg!(windows) && *byte == b'\\'))
+        .any(|part| part == b"..");
+    if !path.is_absolute() || has_parent {
         return Err("Choose an absolute directory without '..'".into());
     }
     let mut existing = path;
@@ -371,23 +401,38 @@ fn safe_directory(path: &Path) -> Result<()> {
 }
 
 fn relative_path(value: &str, allow_empty: bool) -> Result<PathBuf> {
-    // Apply the same boundary on both targets, including Windows drive/ADS syntax.
-    if (value.is_empty() && !allow_empty)
-        || value.contains(['\\', ':'])
-        || value.starts_with('/')
-        || (!value.is_empty()
-            && value
-                .split('/')
-                .any(|p| p.is_empty() || p == "." || p == ".."))
-    {
-        return Err("Expected a relative path inside the selected workspace area".into());
+    if value.is_empty() && allow_empty {
+        return Ok(PathBuf::new());
     }
-    let path = PathBuf::from(value);
-    if path
-        .components()
-        .any(|c| !matches!(c, Component::Normal(_)))
-    {
-        return Err("Invalid relative path".into());
+    let mut path = PathBuf::new();
+    for part in value.split('/') {
+        let bytes = percent_decode_str(part).collect::<Vec<_>>();
+        // Validate after decoding so encoded separators and '..' cannot bypass
+        // the area boundary. Backslash and colon are ordinary names on Unix.
+        if bytes.is_empty()
+            || bytes == b"."
+            || bytes == b".."
+            || bytes.contains(&0)
+            || bytes.contains(&b'/')
+            || (cfg!(windows) && bytes.iter().any(|b| matches!(b, b'\\' | b':')))
+        {
+            return Err("Expected a relative path inside the selected workspace area".into());
+        }
+        #[cfg(unix)]
+        let name = {
+            use std::os::unix::ffi::OsStringExt;
+            OsString::from_vec(bytes)
+        };
+        #[cfg(not(unix))]
+        let name =
+            OsString::from(String::from_utf8(bytes).map_err(|_| "Invalid filename encoding")?);
+        if !matches!(
+            Path::new(&name).components().next(),
+            Some(Component::Normal(_))
+        ) {
+            return Err("Invalid relative path".into());
+        }
+        path.push(name);
     }
     Ok(path)
 }
@@ -696,6 +741,34 @@ mod tests {
                 })
                 .is_err()
         );
+        #[cfg(windows)]
+        {
+            let regular = PathBuf::from(root.to_str().unwrap().strip_prefix(r"\\?\").unwrap());
+            let saved = fs::read(&workspace.config_file).unwrap();
+            for base in [&root, &regular] {
+                for suffix in [r"\..\escape", "/../escape", r"\nested/..\escape"] {
+                    // OsString::push preserves the input spelling; PathBuf::join
+                    // can normalize '..' away for a verbatim base.
+                    let mut input = base.as_os_str().to_os_string();
+                    input.push(suffix);
+                    for preferences in [
+                        Preferences {
+                            workspace_root: Some(input.clone().into()),
+                            temp_root: None,
+                        },
+                        Preferences {
+                            workspace_root: None,
+                            temp_root: Some(input.clone().into()),
+                        },
+                    ] {
+                        assert!(workspace.apply(preferences).is_err(), "accepted {input:?}");
+                    }
+                }
+            }
+            assert_eq!(fs::read(&workspace.config_file).unwrap(), saved);
+            assert!(!root.parent().unwrap().join("escape").exists());
+            assert!(!root.join("nested").exists());
+        }
         fs::write(
             &workspace.config_file,
             serde_json::to_vec(&Preferences {
@@ -742,7 +815,14 @@ mod tests {
         assert!(workspace.import(project.clone()).is_err());
         let imported = workspace.area(Area::Imported).unwrap();
         let authored = workspace.area(Area::Authored).unwrap();
-        assert_eq!(workspace.list(Area::Imported, "Example").unwrap().len(), 4);
+        assert_eq!(
+            workspace
+                .list(Area::Imported, "Example")
+                .unwrap()
+                .entries
+                .len(),
+            4
+        );
         assert!(workspace.import(imported.clone()).is_err());
         assert!(
             workspace
@@ -783,6 +863,88 @@ mod tests {
             b"synthetic image.png"
         );
         assert_eq!(fs::read(single).unwrap(), b"single");
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let folder = OsString::from_vec(b"Lesson-\xff".to_vec());
+            let special = project.with_file_name(&folder);
+            let nested = OsString::from("nested:backup\\100%");
+            fs::create_dir_all(special.join(&nested)).unwrap();
+            let names = [
+                OsString::from("sample:backup.txt"),
+                OsString::from("note\\backup.txt"),
+                OsString::from("literal%2F.txt"),
+                OsString::from("範例.c"),
+                OsString::from_vec(b"same-\xff.bin".to_vec()),
+                OsString::from_vec(b"same-\xfe.bin".to_vec()),
+            ];
+            for (i, name) in names.iter().enumerate() {
+                fs::write(special.join(&nested).join(name), [i as u8]).unwrap();
+            }
+            workspace.import(special.clone()).unwrap();
+            let root_listing = workspace.list(Area::Imported, "").unwrap();
+            // This is also the JSON returned across the Tauri boundary.
+            serde_json::to_value(&root_listing).unwrap();
+            let lesson = root_listing
+                .entries
+                .iter()
+                .find(|e| e.name == folder.to_string_lossy())
+                .unwrap();
+            let child = workspace
+                .list(Area::Imported, &lesson.relative_path)
+                .unwrap()
+                .entries
+                .remove(0);
+            let listing = workspace
+                .list(Area::Imported, &child.relative_path)
+                .unwrap();
+            assert_eq!(listing.entries.len(), names.len());
+            assert_eq!(
+                listing.display_path,
+                Path::new(&folder).join(&nested).to_string_lossy()
+            );
+            let similar = listing
+                .entries
+                .iter()
+                .filter(|e| e.name == "same-�.bin")
+                .collect::<Vec<_>>();
+            assert_eq!(similar.len(), 2);
+            assert_ne!(similar[0].relative_path, similar[1].relative_path);
+            for entry in &listing.entries {
+                workspace.copy_to_authored(&entry.relative_path).unwrap();
+                assert!(workspace.copy_to_authored(&entry.relative_path).is_err());
+            }
+            for (i, name) in names.iter().enumerate() {
+                for base in [&special, &imported.join(&folder), &authored.join(&folder)] {
+                    assert_eq!(fs::read(base.join(&nested).join(name)).unwrap(), [i as u8]);
+                }
+            }
+            let authored_listing = workspace
+                .list(Area::Authored, &child.relative_path)
+                .unwrap();
+            assert_eq!(authored_listing.entries.len(), names.len());
+            workspace
+                .create_file(&child.relative_path, "new.c")
+                .unwrap();
+            assert!(authored.join(&folder).join(&nested).join("new.c").is_file());
+            // Whole-folder copies retain the same native names as selected files.
+            let other_name = OsString::from_vec(b"Whole-\xfe".to_vec());
+            let whole = special.with_file_name(&other_name);
+            fs::rename(&special, &whole).unwrap();
+            workspace.import(whole).unwrap();
+            let entry = workspace
+                .list(Area::Imported, "")
+                .unwrap()
+                .entries
+                .into_iter()
+                .find(|e| e.name == other_name.to_string_lossy())
+                .unwrap();
+            workspace.copy_to_authored(&entry.relative_path).unwrap();
+            assert_eq!(
+                fs::read(authored.join(&other_name).join(&nested).join(&names[4])).unwrap(),
+                [4]
+            );
+        }
     }
 
     #[test]
@@ -823,6 +985,9 @@ mod tests {
             "C:\\temp",
             "nested/..",
             "nested//child",
+            "nested/%2e%2e",
+            "nested/%2Fescape",
+            "%00",
         ] {
             assert!(workspace.create_file(path, "bad.c").is_err());
             assert!(workspace.copy_to_authored(path).is_err());
@@ -880,6 +1045,7 @@ mod tests {
             workspace
                 .list(Area::Imported, "")
                 .unwrap()
+                .entries
                 .iter()
                 .any(|e| e.name == "link" && e.blocked)
         );

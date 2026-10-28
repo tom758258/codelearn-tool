@@ -68,6 +68,10 @@ Import File/Folder copies all regular files to Imported, preserving the folder s
 
 Import File／Folder 將所有一般檔案複製至 Imported，保留目錄結構與外部原始檔。選取項目後按 Copy to Authored，即可建立獨立的工作副本，保留相對於 Imported 的路徑。使用 Open／Up 瀏覽資料夾；New File 會在目前顯示的 Authored 資料夾建立空白 `.c`、`.h` 或 `.txt`。既有目的項目會被拒絕，不覆寫或合併資料夾。匯入與複製拒絕 Symlink、Windows Junction 及特殊檔案，既有區域中的連結無法開啟。Workspace 與 Temp 不可重疊，包括實體路徑別名。操作依序處理，錯誤顯示於視窗。
 
+On Linux, imported names containing colons, backslashes, or non-UTF-8 bytes remain browsable and can be copied to Authored. Bytes that cannot be displayed as text appear as `�`; file operations preserve the original names, including names that look identical in the list.
+
+在 Linux，匯入檔名含冒號、反斜線或非 UTF-8 位元組時，仍可瀏覽及複製至 Authored。無法以文字顯示的位元組會顯示為 `�`；檔案操作保留原始檔名，即使列表中的名稱看起來相同也不會混淆。
+
 Failed copies attempt to remove only entries created by that operation whose filesystem identities still match. Unexpected entries or cleanup errors are retained and reported. File copies are not transactions; a crash can leave partial data. Path checks do not protect against another process actively replacing entries during an operation.
 
 複製失敗時，僅嘗試移除該次建立、檔案系統身分仍相符的項目；意外新增的內容或無法清理的項目會保留並回報。檔案複製不是交易，崩潰可能留下部分資料；路徑檢查無法防範其他程序在操作期間持續替換檔案項目。
@@ -79,6 +83,7 @@ Failed copies attempt to remove only entries created by that operation whose fil
 | Desktop UI / 桌面介面 | React, TypeScript, Vite; `@tauri-apps/api` for commands / 呼叫 Commands |
 | Desktop host / 桌面宿主 | Tauri 2; `tauri-plugin-dialog` and `@tauri-apps/plugin-dialog` for native selection / 原生選擇視窗 |
 | Workspace / 工作區 | `serde`, `serde_json` for local preferences; `tempfile` for atomic settings replacement and write probes; `same-file` for cleanup ownership / 本機偏好、原子替換設定與寫入檢查、清理歸屬檢查 |
+| Filename transport / 檔名傳遞 | `percent-encoding` preserves native filename bytes between the UI and Rust / 保留 UI 與 Rust 之間傳遞的原始檔名位元組 |
 | Rust Core direct dependencies / Rust Core 直接依賴 | `same-file`, `tempfile`; Linux `libc`; Windows `windows-sys` for process and filesystem APIs / 程序及檔案系統 API |
 | External toolchains / 外部工具鏈 | GCC and GDB are not bundled or automatically installed / GCC 與 GDB 不隨 Desktop 內建，也不自動安裝 |
 
