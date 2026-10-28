@@ -733,10 +733,14 @@ mod tests {
                 })
                 .is_err()
         );
+        // Match a path received from the settings input. Joining onto a Windows
+        // verbatim root would remove '..' before apply() could validate it.
+        let mut invalid_root = root.as_os_str().to_os_string();
+        invalid_root.push("/../escape");
         assert!(
             workspace
                 .apply(Preferences {
-                    workspace_root: Some(root.join("../escape")),
+                    workspace_root: Some(invalid_root.into()),
                     temp_root: None
                 })
                 .is_err()
