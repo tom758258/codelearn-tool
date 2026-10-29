@@ -35,7 +35,22 @@ type CompileState = {
   output: { success: boolean; exit_code: number | null; stdout: string; stderr: string; error: string | null; cleanup_errors: string[] } | null
   cleanup_errors: string[]
 }
-type Choice = 'save' | 'discard' | 'cancel'
+type RunOutput = {
+  outcome: 'Exited' | 'Stopped' | 'Timeout' | 'OutputLimit' | 'ProcessError' | null
+  exit_code: number | null
+  stdout: string
+  stderr: string
+  start_error: string | null
+  process_errors: string[]
+  cleanup_errors: string[]
+  working_directory: string | null
+}
+type RunStatus = { active: boolean; output: RunOutput | null; error: string | null }
+type RunReply = { Ok: RunOutput } | { Err: string }
+type ActiveRun = { done: Promise<void>; stopTask: Promise<void> | null; submitted: boolean; settled: boolean; stopRequested: boolean }
+type Choice = 'save' | 'discard' | 'cancel' | 'close'
+type Question = { kind: 'save' | 'cleanup'; text: string }
+const pause = (milliseconds: number) => new Promise<void>(resolve => window.setTimeout(resolve, milliseconds))
 const emptyListing = (): Listing => ({ path: '', displayPath: '', entries: [], selected: null })
 const emptyCompile = (): CompileState => ({ targets: { primary: null, additional: [], includes: [] }, candidates: [], gcc: null, gdb: null, build_valid: false, output: null, cleanup_errors: [] })
 const isDirty = (document: OpenDocument | null) => document !== null && document.value !== document.content
@@ -50,7 +65,8 @@ function App() {
   const [imported, setImported] = useState<Listing>(emptyListing)
   const [authored, setAuthored] = useState<Listing>(emptyListing)
   const [filename, setFilename] = useState('')
-  const [busy, setBusy] = useState(true)
+  const [operationBusy, setBusy] = useState(true)
+  const [closing, setClosing] = useState(false)
   const [activity, setActivity] = useState('Loading…')
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
@@ -58,7 +74,14 @@ function App() {
   const [compilation, setCompilation] = useState<CompileState>(emptyCompile)
   const [tool, setTool] = useState<Tool>('GCC')
   const [toolPath, setToolPath] = useState('')
-  const [question, setQuestion] = useState<string | null>(null)
+  const [question, setQuestion] = useState<Question | null>(null)
+  const [stdin, setStdin] = useState('')
+  const [runPhase, setRunPhase] = useState<'idle' | 'running' | 'stopping'>('idle')
+  const [runOutput, setRunOutput] = useState<RunOutput | null>(null)
+  const [cleanupWarnings, setCleanupWarnings] = useState<string[]>([])
+  const pendingCleanup = useRef<string[]>([])
+  const activeRun = useRef<ActiveRun | null>(null)
+  const closePending = useRef(false)
   const running = useRef(true)
   const currentDocument = useRef<OpenDocument | null>(null)
   const editorUpdates = useRef<Promise<void>>(Promise.resolve())
@@ -66,6 +89,7 @@ function App() {
   const answer = useRef<((choice: Choice) => void) | null>(null)
   const closeAction = useRef<() => void>(() => {})
   const allowClose = useRef(false)
+  const busy = operationBusy || closing
   const ready = settings !== null && settings.error === null
   const dirty = isDirty(document)
   const selected = authored.entries.find(entry => entry.relative_path === authored.selected)
@@ -126,16 +150,14 @@ function App() {
     let disposed = false
     const stop = getCurrentWindow().onCloseRequested(event => {
       if (allowClose.current) return
-      if (running.current || isDirty(currentDocument.current)) {
-        event.preventDefault()
-        closeAction.current()
-      }
+      event.preventDefault()
+      closeAction.current()
     })
     void stop.then(unlisten => { if (disposed) unlisten() }).catch(cause => setError(String(cause)))
     return () => { disposed = true; void stop.then(unlisten => unlisten()).catch(() => {}) }
   }, [])
 
-  useEffect(() => { if (question) dialog.current?.showModal() }, [question])
+  useEffect(() => { if (question && !dialog.current?.open) dialog.current?.showModal() }, [question])
 
   function choose(choice: Choice) {
     dialog.current?.close()
@@ -154,30 +176,124 @@ function App() {
 
   async function beforeSwitch(reason: string): Promise<boolean | null> {
     if (!isDirty(currentDocument.current)) return false
-    setQuestion(reason)
+    setQuestion({ kind: 'save', text: reason })
     const choice = await new Promise<Choice>(resolve => { answer.current = resolve })
     if (choice === 'cancel') return null
     if (choice === 'save') await save()
     return choice === 'discard'
   }
 
-  closeAction.current = () => {
-    if (running.current) { setError('Please wait for the current operation to finish before closing.'); return }
-    let shouldClose = false
-    void perform(async () => {
-      shouldClose = await beforeSwitch('Save your changes before closing?') !== null
-    }).then(async () => {
-      if (shouldClose) {
-        allowClose.current = true
-        try { await getCurrentWindow().close() }
-        catch (cause) { allowClose.current = false; setError(String(cause)) }
+  function rememberCleanup(errors: string[]) {
+    pendingCleanup.current = [...new Set([...pendingCleanup.current, ...errors])]
+    setCleanupWarnings(pendingCleanup.current)
+  }
+
+  function displayRun(output: RunOutput) {
+    setRunOutput(output)
+    rememberCleanup(output.cleanup_errors.map(error => output.working_directory
+      ? `${error}\nTemporary working directory: ${output.working_directory}` : error))
+  }
+
+  async function recoverRun(cause: unknown): Promise<RunOutput> {
+    // A rejected IPC waiter is not evidence that the Rust worker has stopped.
+    // Retain Busy and Stop until the host confirms completion.
+    for (;;) {
+      let status: RunStatus
+      try { status = await invoke<RunStatus>('get_run_state') }
+      catch (error) {
+        setError(`Cannot confirm run completion. Stop remains available. ${String(error)}`)
+        await pause(250)
+        continue
       }
+      if (status.active) { await pause(50); continue }
+      if (status.output) return status.output
+      if (!status.error) {
+        rememberCleanup(['The run result could not be recovered. Process cleanup could not be confirmed.'])
+      }
+      throw new Error(status.error ?? String(cause))
+    }
+  }
+
+  function runProgram() {
+    if (running.current || closePending.current) return
+    const run: ActiveRun = { done: Promise.resolve(), stopTask: null, submitted: false, settled: false, stopRequested: false }
+    activeRun.current = run
+    setRunOutput(null)
+    setRunPhase('running')
+    run.done = perform(async () => {
+      try {
+        // Stop/Close can arrive while editor updates are still being synchronized.
+        if (run.stopRequested) return
+        run.submitted = true
+        let reply: RunReply
+        try { reply = await invoke<RunReply>('run_program', { stdin }) }
+        catch (cause) { reply = { Ok: await recoverRun(cause) } }
+        if ('Err' in reply) throw new Error(reply.Err)
+        displayRun(reply.Ok)
+      } finally {
+        run.settled = true
+        // Drain a late stop request before another run can be started.
+        await run.stopTask
+      }
+    }, 'Running…').finally(() => {
+      run.settled = true
+      activeRun.current = null
+      setRunPhase('idle')
     })
+  }
+
+  function stopRun(): Promise<void> {
+    const run = activeRun.current
+    if (!run || run.settled) return Promise.resolve()
+    run.stopRequested = true
+    setRunPhase('stopping')
+    setActivity('Stopping and waiting for cleanup…')
+    if (run.stopTask) return run.stopTask
+    run.stopTask = (async () => {
+      // The blocking worker may not have registered yet. Keep the request until
+      // accepted or this run finishes; never carry it into a subsequent run.
+      while (!run.settled && run.submitted) {
+        try { if (await invoke<boolean>('stop_run')) return }
+        catch (cause) { setError(`Could not request stop: ${String(cause)}`) }
+        await pause(25)
+      }
+    })()
+    return run.stopTask
+  }
+
+  closeAction.current = () => {
+    if (closePending.current) return
+    const run = activeRun.current
+    if (running.current && !run) { setError('Please wait for the current operation to finish before closing.'); return }
+    closePending.current = true
+    setClosing(true)
+    void (async () => {
+      try {
+        if (run) {
+          void stopRun()
+          await run.done
+        }
+        if (pendingCleanup.current.length > 0) {
+          setQuestion({ kind: 'cleanup', text: 'Close with unresolved cleanup problems?' })
+          const choice = await new Promise<Choice>(resolve => { answer.current = resolve })
+          if (choice !== 'close') return
+        }
+        let shouldClose = false
+        await perform(async () => {
+          shouldClose = await beforeSwitch('Save your changes before closing?') !== null
+        })
+        if (shouldClose) {
+          allowClose.current = true
+          await getCurrentWindow().close()
+        }
+      } catch (cause) { allowClose.current = false; setError(String(cause)) }
+      finally { closePending.current = false; setClosing(false) }
+    })()
   }
 
   function edit(value: string) {
     const current = currentDocument.current
-    if (!current || running.current) return
+    if (!current || running.current || closePending.current) return
     const next = { ...current, value }
     updateDocument(next)
     if (isDirty(next)) setCompilation(previous => ({ ...previous, build_valid: false }))
@@ -380,9 +496,40 @@ function App() {
         {compilation.cleanup_errors.length > 0 && <div role="alert"><h3>Temporary files could not be removed</h3><pre>{compilation.cleanup_errors.join('\n')}</pre></div>}
         <p className="hint">Results describe the last compilation. Changed files require compilation again. External changes are checked when compiling or refreshing; indirect headers are not continuously monitored.</p>
       </section>
+      <section className="run-panel" aria-label="Run program">
+        <div className="section-title"><h2>Run Program</h2><span className="status" role="status">{runPhase === 'stopping' ? 'Stopping and waiting for cleanup…' : runPhase === 'running' ? 'Starting / running…' : 'Ready'}</span></div>
+        <label htmlFor="run-stdin">Standard input (UTF-8 text, sent before execution)</label>
+        <textarea id="run-stdin" rows={4} disabled={busy} value={stdin} onChange={event => setStdin(event.target.value)} placeholder="Optional input for this run" />
+        <div className="actions">
+          <button className="primary" disabled={busy || !ready || dirty || !compilation.build_valid} onClick={runProgram}>Run</button>
+          <button disabled={runPhase === 'idle'} onClick={() => void stopRun()}>Stop</button>
+        </div>
+        <p className="hint">Compile the current saved sources first. Run does not compile automatically. Input closes after this text is sent; output appears after execution and cleanup. Time limit: 30 seconds. Combined output limit: 25 MiB. Editing and other operations pause until completion.</p>
+      </section>
+      <section className="output-panel" aria-label="Run Output">
+        <h2>Run Output</h2>
+        {runOutput ? <>
+          <p role="status">Outcome: {runOutput.outcome ?? 'Could not start'} · Exit code: {runOutput.exit_code ?? 'Not available'}</p>
+          {runOutput.start_error && <p className="tool-error" role="alert">{runOutput.start_error}</p>}
+          <h3>Standard output</h3><pre>{runOutput.stdout || '(No output)'}</pre>
+          <h3>Standard error</h3><pre>{runOutput.stderr || '(No output)'}</pre>
+          {runOutput.process_errors.length > 0 && <div role="alert"><h3>Process problems</h3><pre>{runOutput.process_errors.join('\n')}</pre></div>}
+          {runOutput.cleanup_errors.length > 0 && <div role="alert"><h3>Cleanup problems</h3><pre>{runOutput.cleanup_errors.join('\n')}</pre></div>}
+          {runOutput.working_directory && <p className="hint">Temporary working directory: <code>{runOutput.working_directory}</code>. It may be removed when the compilation is replaced.</p>}
+        </> : <p className="empty">Run a compiled program to see its results.</p>}
+        {cleanupWarnings.length > 0 && <div className="error" role="alert"><h3>Unresolved cleanup warnings</h3><pre>{cleanupWarnings.join('\n')}</pre><p>Closing requires confirmation. Confirming does not resolve these problems.</p></div>}
+        <p className="hint">A nonzero exit code or standard error output can be a program result. Non-UTF-8 bytes are displayed with replacement characters. Input and results are kept only in this window; imported files are not copied into the run directory.</p>
+      </section>
       <dialog ref={dialog} onCancel={event => { event.preventDefault(); choose('cancel') }} aria-labelledby="save-question">
-        <h2 id="save-question">{question}</h2><p>Your unsaved changes are still in the editor.</p>
-        <div className="actions"><button autoFocus onClick={() => choose('save')}>Save</button><button onClick={() => choose('discard')}>Discard</button><button onClick={() => choose('cancel')}>Cancel</button></div>
+        <h2 id="save-question">{question?.text}</h2>
+        {question?.kind === 'cleanup' ? <>
+          <p>Process or temporary-file cleanup reported problems. Some resources may remain. Closing does not confirm that cleanup succeeded.</p>
+          <pre>{cleanupWarnings.join('\n')}</pre>
+          <div className="actions"><button autoFocus onClick={() => choose('cancel')}>Keep Open</button><button onClick={() => choose('close')}>Close Anyway</button></div>
+        </> : <>
+          <p>Your unsaved changes are still in the editor.</p>
+          <div className="actions"><button autoFocus onClick={() => choose('save')}>Save</button><button onClick={() => choose('discard')}>Discard</button><button onClick={() => choose('cancel')}>Cancel</button></div>
+        </>}
       </dialog>
     </main>
   )

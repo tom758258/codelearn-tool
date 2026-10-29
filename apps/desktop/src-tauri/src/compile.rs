@@ -1,10 +1,12 @@
-//! Desktop state and thin adapters to Core. No student program is executed here.
+//! Desktop state and thin adapters to Core.
+use crate::run::{RunControl, RunOutput};
 use crate::workspace::{Preferences, Result, Settings, Workspace};
 use codelearn_tool_core::{
     build::{
         BuildArtifact, BuildFailure, BuildRequest, BuildResult, CleanupReport, ProcessFailure,
         Source,
     },
+    run::RunRequest,
     toolchain::{Candidate, DiscoveryRequest, Origin, Tool, Validation},
 };
 use serde::{Deserialize, Serialize};
@@ -20,6 +22,7 @@ use std::{
 pub struct DesktopState {
     desktop: Mutex<Desktop>,
     busy: AtomicBool,
+    pub run_control: RunControl,
 }
 
 impl DesktopState {
@@ -27,7 +30,12 @@ impl DesktopState {
         Self {
             desktop: Mutex::new(Desktop::new(workspace)),
             busy: AtomicBool::new(false),
+            run_control: RunControl::default(),
         }
+    }
+
+    pub fn run(&self, stdin: String) -> Result<RunOutput> {
+        self.operate(|state| self.run_control.execute(|| lock(state)?.prepare_run(stdin)))
     }
 
     pub fn operate<T>(&self, operation: impl FnOnce(&Mutex<Desktop>) -> Result<T>) -> Result<T> {
@@ -431,13 +439,32 @@ impl Desktop {
         });
     }
 
-    pub fn view(&mut self) -> View {
+    pub fn prepare_run(&mut self, stdin: String) -> Result<RunRequest> {
+        if self.editor.as_ref().is_some_and(|editor| editor.dirty) {
+            return Err("Save your edits and compile before running".into());
+        }
+        self.check_current();
+        let current = self
+            .current
+            .as_ref()
+            .ok_or("Compile the current saved sources successfully before running")?;
+        let (authored, _) = self.workspace.compile_roots()?;
+        let mut request = RunRequest::new(current.artifact.clone(), authored);
+        request.stdin = stdin.into_bytes();
+        Ok(request)
+    }
+
+    fn check_current(&mut self) {
         if self.current.as_ref().is_some_and(|current| {
             !current.artifact.executable().is_file()
                 || !self.inputs_match(&current.inputs).unwrap_or(false)
         }) {
             self.invalidate();
         }
+    }
+
+    pub fn view(&mut self) -> View {
+        self.check_current();
         View {
             targets: self.targets.clone(),
             candidates: self
@@ -550,8 +577,10 @@ mod tests {
             .operate(|state| {
                 let mut desktop = lock(state)?;
                 desktop.open("main.c".into(), false)?;
+                assert!(desktop.prepare_run(String::new()).is_err());
                 desktop.set_dirty("main.c", true)?;
                 assert!(desktop.prepare_compile().is_err());
+                assert!(desktop.prepare_run(String::new()).is_err());
                 assert!(desktop.open("math.h".into(), false).is_err());
                 assert!(desktop.apply(Preferences::default(), false).is_err());
                 desktop.save("main.c", "int main(void) { return 0; }\n".into())?;
@@ -612,6 +641,8 @@ mod tests {
                 .operate(|state| lock(state)?.prepare_compile())
                 .is_err()
         );
+        assert!(state.run(String::new()).is_err());
+        assert!(!state.run_control.stop());
         release_tx.send(()).unwrap();
         assert!(worker.join().unwrap().is_err());
         assert!(
@@ -665,6 +696,7 @@ mod tests {
             let old_directory = desktop.current.as_ref().unwrap().artifact.directory().to_owned();
             desktop.set_dirty("include/math.h", true)?;
             assert!(!desktop.view().build_valid);
+            assert!(desktop.prepare_run(String::new()).is_err());
             assert!(!old_directory.exists());
             assert!(desktop.prepare_compile().is_err());
             desktop.save("include/math.h", "int answer(void);\n// saved\n".into())?;
@@ -673,9 +705,11 @@ mod tests {
             assert!(desktop.view().build_valid);
             fs::write(root.join("math.c"), "invalid C\n").unwrap();
             assert!(!desktop.view().build_valid); // external source change
+            assert!(desktop.prepare_run(String::new()).is_err());
             compile(&mut desktop)?;
             assert!(!desktop.view().build_valid);
             assert!(!desktop.output.as_ref().unwrap().success);
+            assert!(desktop.prepare_run(String::new()).is_err());
             fs::write(root.join("math.c"), "int answer(void) { return 42; }\n").unwrap();
             compile(&mut desktop)?;
             assert!(desktop.view().build_valid);
@@ -687,17 +721,180 @@ mod tests {
             compile(&mut desktop)?;
             desktop.set_targets(Targets { primary: Some("math.c".into()), ..Targets::default() })?;
             assert!(!desktop.view().build_valid);
+            assert!(desktop.prepare_run(String::new()).is_err());
             fs::write(root.join("math.c"), "int main(void) { return 0; }\n").unwrap();
             compile(&mut desktop)?; // single source
             assert!(desktop.view().build_valid);
             desktop.select_tool(0)?;
             assert!(!desktop.view().build_valid);
+            assert!(desktop.prepare_run(String::new()).is_err());
             compile(&mut desktop)?;
             assert!(desktop.view().build_valid);
             desktop.apply(Preferences::default(), false)?;
             assert!(!desktop.view().build_valid);
+            assert!(desktop.prepare_run(String::new()).is_err());
             assert!(desktop.cleanup_errors.is_empty());
             Ok(())
         }).unwrap();
+    }
+
+    #[test]
+    #[ignore = "Requires CODELEARN_TEST_GCC pointing to an existing GCC executable"]
+    fn desktop_run_preserves_input_results_stop_and_artifact_lifetime() {
+        use codelearn_tool_core::run::{RunOutcome, RunResult};
+        use std::time::{Duration, Instant};
+
+        let gcc =
+            PathBuf::from(std::env::var_os("CODELEARN_TEST_GCC").expect("Set CODELEARN_TEST_GCC"));
+        let (_directory, state) = fixture();
+        let state = Arc::new(state);
+        assert!(state.run(String::new()).is_err());
+        assert!(!state.run_control.status().active);
+        let (root, artifact) = state
+            .operate(|state| {
+                let mut desktop = lock(state)?;
+                let (root, temp) = desktop.workspace.compile_roots()?;
+                fs::write(
+                    root.join("main.c"),
+                    r#"#include <stdio.h>
+#include <string.h>
+int main(void) {
+    char input[128];
+    if (!fgets(input, sizeof input, stdin)) return 0;
+    if (strcmp(input, "wait\n") == 0) {
+        FILE *ready = fopen("ready", "w");
+        if (!ready) return 2;
+        fclose(ready);
+        for (;;) {}
+    }
+    fputs(input, stdout);
+    fputs("example stderr\n", stderr);
+    return 7;
+}
+"#,
+                )
+                .unwrap();
+                let validation =
+                    toolchain::validate(Tool::Gcc, &gcc, &temp, build::DEFAULT_COMPILE_TIMEOUT);
+                assert!(validation.usable, "{:?}", validation.error);
+                desktop.validated(ToolKind::Gcc, gcc, validation);
+                desktop.select_tool(0)?;
+                desktop.set_targets(Targets {
+                    primary: Some("main.c".into()),
+                    ..Targets::default()
+                })?;
+                let prepared = desktop.prepare_compile()?;
+                let result = build::compile(&prepared.request);
+                desktop.finish_compile(prepared, result);
+                let request = desktop.prepare_run(String::new())?;
+                assert_eq!(request.workspace_root, root);
+                assert!(request.input_root.is_none() && request.input_files.is_empty());
+                assert_eq!(
+                    request.timeout,
+                    codelearn_tool_core::run::DEFAULT_RUN_TIMEOUT
+                );
+                Ok((root, request.artifact))
+            })
+            .unwrap();
+
+        for _ in 0..2 {
+            let output = state.run("hello 世界\n".into()).unwrap();
+            assert_eq!(output.outcome, Some("Exited"));
+            assert_eq!(output.exit_code, Some(7));
+            assert_eq!(output.stdout, "hello 世界\n");
+            assert_eq!(output.stderr, "example stderr\n");
+            assert!(output.start_error.is_none());
+            assert!(output.process_errors.is_empty() && output.cleanup_errors.is_empty());
+            assert!(PathBuf::from(output.working_directory.unwrap()).is_dir());
+        }
+        assert_eq!(state.run(String::new()).unwrap().exit_code, Some(0));
+
+        // Stop while the blocking worker is preparing, before a handle exists.
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let worker_state = state.clone();
+        let worker = std::thread::spawn(move || {
+            worker_state.operate(|desktop| {
+                worker_state.run_control.execute(|| {
+                    let request = lock(desktop)?.prepare_run("wait\n".into())?;
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Ok(request)
+                })
+            })
+        });
+        entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert!(state.desktop.try_lock().is_ok());
+        assert!(state.run(String::new()).is_err());
+        assert!(state.operate(|_| Ok(())).is_err());
+        assert!(state.run_control.stop());
+        assert!(state.run_control.stop());
+        assert!(artifact.executable().is_file());
+        release_tx.send(()).unwrap();
+        let stopped = worker.join().unwrap().unwrap();
+        assert_eq!(stopped.outcome, Some("Stopped"));
+        assert!(stopped.cleanup_errors.is_empty());
+        assert!(!state.run_control.stop());
+
+        // Confirm program entry before exercising the running Stop path.
+        for entry in fs::read_dir(artifact.directory()).unwrap().flatten() {
+            let marker = entry.path().join("ready");
+            if marker.exists() {
+                fs::remove_file(marker).unwrap();
+            }
+        }
+        let worker_state = state.clone();
+        let worker = std::thread::spawn(move || worker_state.run("wait\n".into()));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !fs::read_dir(artifact.directory())
+            .unwrap()
+            .flatten()
+            .any(|e| e.path().join("ready").is_file())
+        {
+            assert!(Instant::now() < deadline, "program did not signal entry");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(state.run_control.stop());
+        let stopped = worker.join().unwrap().unwrap();
+        assert_eq!(stopped.outcome, Some("Stopped"));
+        assert!(stopped.cleanup_errors.is_empty());
+        assert_eq!(state.run(String::new()).unwrap().outcome, Some("Exited"));
+
+        // Preserve termination cause independently of process and cleanup errors.
+        for (outcome, expected) in [
+            (RunOutcome::Timeout, "Timeout"),
+            (RunOutcome::OutputLimit, "OutputLimit"),
+            (RunOutcome::ProcessError, "ProcessError"),
+        ] {
+            let output = RunOutput::from(RunResult {
+                outcome,
+                exit_code: None,
+                stdout: vec![0xff],
+                stderr: b"stderr".to_vec(),
+                process_errors: vec!["synthetic I/O failure".into()],
+                cleanup_errors: vec!["synthetic cleanup failure".into()],
+                working_directory: artifact.directory().join("run-synthetic"),
+                artifact: artifact.clone(),
+            });
+            assert_eq!(output.outcome, Some(expected));
+            assert_eq!(output.stdout, "�");
+            assert_eq!(output.process_errors, ["synthetic I/O failure"]);
+            assert_eq!(output.cleanup_errors, ["synthetic cleanup failure"]);
+            assert!(output.start_error.is_none());
+        }
+
+        // A disappeared executable is rejected without launching or recompiling.
+        fs::remove_file(artifact.executable()).unwrap();
+        assert!(state.run(String::new()).is_err());
+        assert!(!state.run_control.status().active);
+        assert!(
+            state
+                .operate(|desktop| Ok(!lock(desktop)?.view().build_valid))
+                .unwrap()
+        );
+        let directory = artifact.directory().to_owned();
+        drop(artifact);
+        assert!(!directory.exists());
+        assert!(root.join("main.c").is_file());
     }
 }

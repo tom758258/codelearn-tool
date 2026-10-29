@@ -6,13 +6,13 @@ A Windows and Linux desktop application for learning programming, starting with 
 
 ## Current scope / 目前範圍
 
-The Tauri 2 desktop now provides Workspace Settings, Imported/Authored file browsing, file and folder import, Copy to Authored, and New File (`.c`, `.h`, `.txt`). The editor opens and saves UTF-8 `.c`, `.h`, and `.txt` files in Authored using Monaco. Select a validated GCC and explicit sources to compile C11 programs and read compiler output. The independent Rust Core also provides supervised program execution and GDB/MI3 debugging APIs.
+The Tauri 2 desktop now provides Workspace Settings, Imported/Authored file browsing, file and folder import, Copy to Authored, and New File (`.c`, `.h`, `.txt`). The editor opens and saves UTF-8 `.c`, `.h`, and `.txt` files in Authored using Monaco. Select a validated GCC and explicit sources to compile C11 programs and read compiler output, then run the current compilation with optional standard input and Stop control. The independent Rust Core also provides supervised program execution and GDB/MI3 debugging APIs.
 
-Tauri 2 桌面程式現已提供 Workspace Settings、Imported／Authored 檔案瀏覽、單檔與整個資料夾匯入、Copy to Authored，以及 New File（`.c`、`.h`、`.txt`）。編輯器使用 Monaco 開啟及儲存 Authored 內的 UTF-8 `.c`、`.h`、`.txt` 檔案。選定經驗證的 GCC 與明確的來源檔，即可編譯 C11 程式並檢視編譯輸出。獨立 Rust Core 也提供受控程序執行及 GDB/MI3 除錯 API。
+Tauri 2 桌面程式現已提供 Workspace Settings、Imported／Authored 檔案瀏覽、單檔與整個資料夾匯入、Copy to Authored，以及 New File（`.c`、`.h`、`.txt`）。編輯器使用 Monaco 開啟及儲存 Authored 內的 UTF-8 `.c`、`.h`、`.txt` 檔案。選定經驗證的 GCC 與明確的來源檔，即可編譯 C11 程式並檢視編譯輸出，再執行目前編譯結果，提供選用的標準輸入及 Stop 操作。獨立 Rust Core 也提供受控程序執行及 GDB/MI3 除錯 API。
 
-Toolchain installation, desktop run/debug controls, lessons, and learning progress are **not implemented**. Workspace files and local path preferences persist on this machine. No telemetry, cloud services, or learning-record storage is included.
+Toolchain installation, desktop debug controls, lessons, and learning progress are **not implemented**. Workspace files and local path preferences persist on this machine. No telemetry, cloud services, or learning-record storage is included.
 
-工具鏈安裝、桌面執行／除錯操作、課程及學習進度均**尚未實作**。Workspace 檔案與本機路徑偏好會保存在這台電腦；不包含遙測、雲端服務或學習紀錄儲存。
+工具鏈安裝、桌面除錯操作、課程及學習進度均**尚未實作**。Workspace 檔案與本機路徑偏好會保存在這台電腦；不包含遙測、雲端服務或學習紀錄儲存。
 
 Core callers explicitly select an absolute GCC executable path and provide existing, separate Workspace and CodeLearnTemp directories. Selected `.c` files, logical source directories, and include directories must resolve inside the Workspace. Text input is compiled from a private snapshot and may link additional selected `.c` files. GCC is validated by a real compile/link; GDB is checked independently for version/startup only. Discovery suggests usable candidates in explicit-path, PATH, then common-location order and never selects one automatically.
 
@@ -90,9 +90,23 @@ Select an Authored entry in the file list, then use **Set Primary .c**, **Add Ot
 
 先在檔案列表選取 Authored 項目，再用 **Set Primary .c**、**Add Other .c** 或 **Add Include Folder** 加入編譯來源；**Include Current Folder** 加入目前顯示的 Authored 資料夾。編譯來源與編輯中的檔案分開，因此可編輯 Header，同時編譯指定的 C 來源。Imported 檔案須先複製至 Authored。編譯只使用明確選取、且位於 Authored 內的來源及 Include 目錄。**Save & Compile** 會先儲存目前編輯內容，儲存失敗即停止。編譯期間介面仍可回應，但暫時禁止編輯、檔案操作、設定及工具選擇。
 
-Compile Output shows success/failure, exit code, standard output, warnings/errors, and cleanup problems. Warnings can accompany success. Editing or saving, changing sources/includes/GCC/workspace, or starting another compilation invalidates the previous result. A failed compilation never restores an older successful result. Known source contents are checked before and after compilation and when refreshing the displayed state. There is no file watcher or complete indirect-header dependency tracking; files changed outside the app may remain undetected until a check. The app retains the compiled result locally only while it remains current; it does not run the program.
+Compile Output shows success/failure, exit code, standard output, warnings/errors, and cleanup problems. Warnings can accompany success. Editing or saving, changing sources/includes/GCC/workspace, or starting another compilation invalidates the previous result. A failed compilation never restores an older successful result. Known source contents are checked before and after compilation and when refreshing the displayed state. There is no file watcher or complete indirect-header dependency tracking; files changed outside the app may remain undetected until a check. The app retains the compiled result locally only while it remains current. Execution requires an explicit Run action.
 
-Compile Output 顯示成功／失敗、結束代碼、標準輸出、警告／錯誤及清理問題；有警告仍可編譯成功。編輯或儲存、變更來源／Include／GCC／工作區，或開始下一次編譯，都會使舊結果失效。編譯失敗不會恢復使用先前的成功結果。編譯前後與更新顯示狀態時，會檢查已掌握來源的內容；沒有檔案監看或完整間接 Header 相依追蹤，外部變更可能直到檢查時才被發現。應用程式僅在結果仍有效時於本機保留編譯產物，不會執行程式。
+Compile Output 顯示成功／失敗、結束代碼、標準輸出、警告／錯誤及清理問題；有警告仍可編譯成功。編輯或儲存、變更來源／Include／GCC／工作區，或開始下一次編譯，都會使舊結果失效。編譯失敗不會恢復使用先前的成功結果。編譯前後與更新顯示狀態時，會檢查已掌握來源的內容；沒有檔案監看或完整間接 Header 相依追蹤，外部變更可能直到檢查時才被發現。應用程式僅在結果仍有效時於本機保留編譯產物，須明確按下 Run 才會執行。
+
+## Running a program / 執行程式
+
+After a successful compilation, enter any UTF-8 text in **Standard input** and choose **Run**. Run checks the saved sources and current compilation again; unsaved edits, changed known sources, or a missing executable require compilation first. Run never compiles automatically. Only one program runs at a time. The editor is read-only and file, settings, toolchain, and compilation operations remain unavailable until execution and cleanup finish. **Stop** remains available, including during startup; requesting stop does not mean cleanup has finished.
+
+成功編譯後，可在 **Standard input** 預先輸入 UTF-8 文字，再按 **Run**。執行前會重新核對已儲存來源與目前編譯結果；有未儲存修改、已掌握來源變更或執行檔遺失時，必須先編譯，不會自動編譯。同時僅執行一個程式；直到執行與清理完成前，編輯器暫時唯讀，檔案、設定、工具選擇及編譯操作暫停。**Stop** 在啟動期間亦可使用；提出停止要求不代表清理已完成。
+
+Input closes after the supplied text is sent; there is no interactive input. **Run Output** displays the final outcome, exit code, stdout, stderr, start/process errors, cleanup errors, and temporary working directory separately from Compile Output. Nonzero exit codes and text on stderr can be ordinary program results. Non-UTF-8 output bytes use replacement characters. The time limit is **30 seconds**, and stdout/stderr have a **25 MiB combined** limit. The working directory may disappear when its compilation is invalidated. Imported files are not automatically copied there; runtime input-file selection is not provided. Input and the latest result remain in memory only, without run history or uploads.
+
+預先文字送出後即關閉輸入，不提供執行中互動輸入。**Run Output** 與 Compile Output 分開，完成後顯示執行結果、結束代碼、stdout、stderr、啟動／程序錯誤、清理錯誤及暫存工作目錄。非零結束代碼或 stderr 文字可能是一般程式結果；非 UTF-8 輸出以替代字元顯示。時間限制為 **30 秒**，stdout/stderr **合計上限 25 MiB**。編譯結果失效時，暫存工作目錄可能被移除。Imported 檔案不會自動複製至此，也不提供執行輸入檔選擇。輸入與最近結果僅保留於記憶體，不建立執行歷史或上傳資料。
+
+Closing the window during a run requests Stop and waits for the final result. Cleanup problems keep the window open for **Keep Open / Close Anyway** confirmation, followed by the usual Save / Discard / Cancel protection for unsaved edits. A later successful run does not erase unresolved cleanup warnings. Closing anyway acknowledges the warning; it does not repair cleanup or prove that all processes exited. These controls cover normal window closing, not forced OS termination, and do not provide a sandbox.
+
+執行中關閉視窗會先要求 Stop，並等待最終結果。若有清理問題，視窗會保留並提供 **Keep Open / Close Anyway** 確認，之後才進入既有的 Save／Discard／Cancel 未儲存保護。後續成功執行不會抹除尚未解決的清理警告。選擇仍要關閉只是確認警告，不會修復清理問題，也不代表所有程序皆已結束。此流程適用一般視窗關閉，不涵蓋作業系統強制終止，亦不提供沙箱隔離。
 
 ## Main dependencies / 主要依賴
 
