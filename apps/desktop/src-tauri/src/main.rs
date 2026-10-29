@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod compile;
+mod run;
 mod workspace;
 
 use codelearn_tool_core::{build, toolchain};
@@ -174,6 +175,25 @@ async fn compile_sources(app: tauri::AppHandle) -> Result<View> {
     .await
 }
 
+#[tauri::command]
+async fn run_program(app: tauri::AppHandle, stdin: String) -> Result<Result<run::RunOutput>> {
+    // Expected validation failures are returned as data, distinct from a lost
+    // command waiter. Only the latter needs recovery through get_run_state.
+    tauri::async_runtime::spawn_blocking(move || app.state::<DesktopState>().run(stdin))
+        .await
+        .map_err(|error| format!("The run command could not finish: {error}"))
+}
+
+#[tauri::command]
+fn stop_run(state: tauri::State<'_, DesktopState>) -> bool {
+    state.run_control.stop()
+}
+
+#[tauri::command]
+fn get_run_state(state: tauri::State<'_, DesktopState>) -> run::RunStatus {
+    state.run_control.status()
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -185,6 +205,16 @@ fn main() {
                 paths.app_cache_dir()?.join("CodeLearnTemp"),
             )));
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event
+                && window.state::<DesktopState>().run_control.stop()
+            {
+                // React waits for the result and handles cleanup/unsaved-edit
+                // confirmation. A missing frontend waiter cannot terminate the
+                // host while its blocking worker still owns a run session.
+                api.prevent_close();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_workspace_settings,
@@ -202,6 +232,9 @@ fn main() {
             validate_toolchain,
             select_toolchain,
             compile_sources,
+            run_program,
+            stop_run,
+            get_run_state,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run CodeLearn Tool");
