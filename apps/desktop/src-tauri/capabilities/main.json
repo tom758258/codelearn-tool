@@ -3,5 +3,5 @@
   "identifier": "main-dialog",
   "description": "Allow file selection and a close confirmation for unsaved edits in the main window.",
   "windows": ["main"],
-  "permissions": ["dialog:allow-open", "core:event:allow-listen", "core:event:allow-unlisten", "core:window:allow-close"]
+  "permissions": ["dialog:allow-open", "core:event:allow-listen", "core:event:allow-unlisten", "core:window:allow-close", "core:window:allow-destroy"]
 }
