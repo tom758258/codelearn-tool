@@ -7,11 +7,9 @@ use std::{
     fs::{self, File, Metadata, OpenOptions},
     io::{self, Write},
     path::{Component, Path, PathBuf},
-    sync::Mutex,
 };
 
 pub type Result<T> = std::result::Result<T, String>;
-pub struct WorkspaceState(pub Mutex<Workspace>);
 
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -287,6 +285,75 @@ impl Workspace {
                 format!("Cannot create file (existing names are never overwritten): {e}")
             })?;
         Ok(())
+    }
+
+    pub fn compile_roots(&self) -> Result<(PathBuf, PathBuf)> {
+        let authored = self.area(Area::Authored)?;
+        let temp = self.active.as_ref().map_err(Clone::clone)?.temp.clone();
+        check_absolute_chain(&temp)?;
+        Ok((authored, temp))
+    }
+
+    pub fn authored_path(&self, relative: &str, directory: bool) -> Result<PathBuf> {
+        let root = self.area(Area::Authored)?;
+        let path = checked_path(&root, &relative_path(relative, directory)?)?;
+        let metadata = safe_metadata(&path)?;
+        if (directory && !metadata.is_dir()) || (!directory && !metadata.is_file()) {
+            return Err("Choose an Authored file or directory of the required type".into());
+        }
+        Ok(path)
+    }
+
+    fn editable_path(&self, relative: &str) -> Result<PathBuf> {
+        let path = self.authored_path(relative, false)?;
+        if !matches!(
+            path.extension().and_then(|ext| ext.to_str()),
+            Some("c" | "h" | "txt")
+        ) {
+            return Err("The editor supports only .c, .h and .txt files in Authored".into());
+        }
+        Ok(path)
+    }
+
+    pub fn read_authored(&self, relative: &str) -> Result<String> {
+        let path = self.editable_path(relative)?;
+        let bytes = fs::read(path).map_err(|e| format!("Cannot read file: {e}"))?;
+        String::from_utf8(bytes)
+            .map_err(|_| "This file is not UTF-8 text; its contents were not changed".into())
+    }
+
+    pub fn save_authored(&self, relative: &str, content: &str, expected: &str) -> Result<()> {
+        let path = self.editable_path(relative)?;
+        if self.read_authored(relative)? != expected {
+            return Err("The file changed outside the editor. Your edits are still open; reload only if you want to discard them".into());
+        }
+        let permissions = safe_metadata(&path)?.permissions();
+        if permissions.readonly() {
+            return Err("The file is read-only. Your edits have not been saved".into());
+        }
+        let mut temporary =
+            tempfile::NamedTempFile::new_in(path.parent().ok_or("Invalid file path")?)
+                .map_err(|e| format!("Cannot prepare file save: {e}"))?;
+        temporary
+            .write_all(content.as_bytes())
+            .and_then(|()| temporary.as_file().set_permissions(permissions))
+            .and_then(|()| temporary.as_file().sync_all())
+            .map_err(|e| format!("Cannot save file: {e}"))?;
+        // Recheck after writing the temporary file. This is conflict protection,
+        // not a lock against concurrent external writers.
+        if self.read_authored(relative)? != expected {
+            return Err("The file changed while saving. Your edits have not been saved".into());
+        }
+        temporary
+            .persist(&path)
+            .map_err(|e| format!("Cannot replace file: {e}"))?;
+        Ok(())
+    }
+
+    pub fn display_relative(&self, relative: &str) -> Result<String> {
+        Ok(relative_path(relative, true)?
+            .to_string_lossy()
+            .into_owned())
     }
 }
 
@@ -948,6 +1015,78 @@ mod tests {
                 fs::read(authored.join(&other_name).join(&nested).join(&names[4])).unwrap(),
                 [4]
             );
+        }
+    }
+
+    #[test]
+    fn authored_read_save_preserves_text_and_rejects_conflicts_and_unsafe_paths() {
+        let (_dir, workspace) = fixture();
+        let root = workspace.area(Area::Authored).unwrap();
+        let path = root.join("lesson.c");
+        let original = "\u{feff}// 範例\r\nint main(void) { return 0; }\r\n";
+        fs::write(&path, original).unwrap();
+        assert_eq!(workspace.read_authored("lesson%2Ec").unwrap(), original);
+        let edited = original.replace("return 0", "return 1");
+        workspace
+            .save_authored("lesson%2Ec", &edited, original)
+            .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), edited.as_bytes());
+        // Same-size external edits must conflict even if timestamps coincide.
+        let external = edited.replace("return 1", "return 2");
+        fs::write(&path, &external).unwrap();
+        assert!(
+            workspace
+                .save_authored("lesson%2Ec", original, &edited)
+                .is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), external.as_bytes());
+        let permissions = fs::metadata(&path).unwrap().permissions();
+        let mut readonly = permissions.clone();
+        readonly.set_readonly(true);
+        fs::set_permissions(&path, readonly).unwrap();
+        assert!(
+            workspace
+                .save_authored("lesson%2Ec", original, &external)
+                .is_err()
+        );
+        fs::set_permissions(&path, permissions).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), external.as_bytes());
+        fs::write(root.join("invalid.h"), [0xff, 0xfe]).unwrap();
+        assert!(workspace.read_authored("invalid.h").is_err());
+        assert!(workspace.save_authored("invalid.h", "", "").is_err());
+        assert_eq!(fs::read(root.join("invalid.h")).unwrap(), [0xff, 0xfe]);
+        fs::write(root.join("image.bin"), "text").unwrap();
+        fs::create_dir(root.join("folder.c")).unwrap();
+        for relative in [
+            "../Imported/lesson.c",
+            "%2e%2e/lesson.c",
+            "%2Flesson.c",
+            "image.bin",
+            "folder.c",
+        ] {
+            assert!(workspace.read_authored(relative).is_err());
+            assert!(workspace.save_authored(relative, "", "").is_err());
+        }
+        let imported = workspace.area(Area::Imported).unwrap();
+        fs::write(imported.join("private.c"), "original").unwrap();
+        directory_link(&imported, &root.join("link"));
+        assert!(workspace.read_authored("link/private.c").is_err());
+        assert!(
+            workspace
+                .save_authored("link/private.c", "changed", "original")
+                .is_err()
+        );
+        assert_eq!(fs::read(imported.join("private.c")).unwrap(), b"original");
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let native = root.join(OsString::from_vec(b"lesson-\xff.c".to_vec()));
+            fs::write(&native, original).unwrap();
+            assert_eq!(workspace.read_authored("lesson-%FF%2Ec").unwrap(), original);
+            workspace
+                .save_authored("lesson-%FF%2Ec", &edited, original)
+                .unwrap();
+            assert_eq!(fs::read(native).unwrap(), edited.as_bytes());
         }
     }
 

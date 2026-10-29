@@ -6,13 +6,13 @@ A Windows and Linux desktop application for learning programming, starting with 
 
 ## Current scope / 目前範圍
 
-The Tauri 2 desktop now provides Workspace Settings, Imported/Authored file browsing, file and folder import, Copy to Authored, and New File (`.c`, `.h`, `.txt`). Its independent Rust Core library provides GCC/GDB discovery and validation, C11 compile/link, supervised program execution, and GDB/MI3 debug session APIs; these Core features are not connected to the UI yet.
+The Tauri 2 desktop now provides Workspace Settings, Imported/Authored file browsing, file and folder import, Copy to Authored, and New File (`.c`, `.h`, `.txt`). The editor opens and saves UTF-8 `.c`, `.h`, and `.txt` files in Authored using Monaco. Select a validated GCC and explicit sources to compile C11 programs and read compiler output. The independent Rust Core also provides supervised program execution and GDB/MI3 debugging APIs.
 
-Tauri 2 桌面程式現已提供 Workspace Settings、Imported／Authored 檔案瀏覽、單檔與整個資料夾匯入、Copy to Authored，以及 New File（`.c`、`.h`、`.txt`）。獨立 Rust Core Library 提供 GCC/GDB 偵測與驗證、C11 編譯／連結、受控程序執行，以及 GDB/MI3 除錯 Session API；這些 Core 功能尚未串接至 UI。
+Tauri 2 桌面程式現已提供 Workspace Settings、Imported／Authored 檔案瀏覽、單檔與整個資料夾匯入、Copy to Authored，以及 New File（`.c`、`.h`、`.txt`）。編輯器使用 Monaco 開啟及儲存 Authored 內的 UTF-8 `.c`、`.h`、`.txt` 檔案。選定經驗證的 GCC 與明確的來源檔，即可編譯 C11 程式並檢視編譯輸出。獨立 Rust Core 也提供受控程序執行及 GDB/MI3 除錯 API。
 
-C editing/Monaco, toolchain installation, desktop compile/run/debug controls, lessons, and learning progress are **not implemented**. Workspace files and local path preferences persist on this machine. No telemetry, cloud services, or learning-record storage is included.
+Toolchain installation, desktop run/debug controls, lessons, and learning progress are **not implemented**. Workspace files and local path preferences persist on this machine. No telemetry, cloud services, or learning-record storage is included.
 
-C 程式編輯／Monaco、工具鏈安裝、桌面編譯／執行／除錯操作、課程及學習進度均**尚未實作**。Workspace 檔案與本機路徑偏好會保存在這台電腦；不包含遙測、雲端服務或學習紀錄儲存。
+工具鏈安裝、桌面執行／除錯操作、課程及學習進度均**尚未實作**。Workspace 檔案與本機路徑偏好會保存在這台電腦；不包含遙測、雲端服務或學習紀錄儲存。
 
 Core callers explicitly select an absolute GCC executable path and provide existing, separate Workspace and CodeLearnTemp directories. Selected `.c` files, logical source directories, and include directories must resolve inside the Workspace. Text input is compiled from a private snapshot and may link additional selected `.c` files. GCC is validated by a real compile/link; GDB is checked independently for version/startup only. Discovery suggests usable candidates in explicit-path, PATH, then common-location order and never selects one automatically.
 
@@ -76,20 +76,38 @@ Failed copies attempt to remove only entries created by that operation whose fil
 
 複製失敗時，僅嘗試移除該次建立、檔案系統身分仍相符的項目；意外新增的內容或無法清理的項目會保留並回報。檔案複製不是交易，崩潰可能留下部分資料；路徑檢查無法防範其他程序在操作期間持續替換檔案項目。
 
+## Editing and compiling / 編輯與編譯
+
+Choose **Edit** beside an Authored `.c`, `.h`, or `.txt` file. The editor shows unsaved changes and provides Save and Reload. Opening another file, applying workspace settings, or closing with unsaved changes offers Save, Discard, and Cancel. Save compares the on-disk content with the last opened or saved content; a conflict or write failure keeps your edits open. To abandon edits after an external change, choose Reload and then Discard. Non-UTF-8 content is rejected without conversion; native Linux filenames remain supported. Saves use a temporary file in the same folder before replacing the destination. These checks do not prevent every race with external writers.
+
+在 Authored 的 `.c`、`.h` 或 `.txt` 檔案旁選擇 **Edit**。編輯器顯示未儲存狀態，並提供 Save 與 Reload。開啟其他檔案、套用工作區設定或關閉視窗時，若有未儲存內容，會提供 Save、Discard、Cancel。儲存前會將磁碟內容與上次開啟或儲存的內容比對；衝突或寫入失敗時保留編輯內容。外部修改後若要放棄自己的編輯，選 Reload，再選 Discard。不符合 UTF-8 的內容會被拒絕，不進行轉碼；仍支援 Linux 原始檔名。儲存時先寫入同資料夾的暫存檔，再替換目的檔案；這些檢查無法防止所有外部同時寫入的競合。
+
+Use **Scan / Refresh**, or enter an absolute executable path and choose **Validate**, then explicitly **Select GCC** or **Select GDB**. Validation shows the version, availability, origin, and failure details. GCC must pass a real compile/link check. GDB is checked independently for version/startup; it is optional for compilation and this check does not establish debugging compatibility. Selections are kept only while the app is open. No tools are automatically selected or installed.
+
+使用 **Scan / Refresh**，或輸入執行檔絕對路徑後選 **Validate**，再明確按下 **Select GCC** 或 **Select GDB**。驗證結果顯示版本、可用性、來源及失敗細節。GCC 必須通過真實編譯／連結檢查；GDB 另行檢查版本與啟動能力，編譯時不必選擇 GDB，這項檢查也不代表除錯相容性已驗證。工具選擇只保留至應用程式關閉，不自動選擇或安裝。
+
+Select an Authored entry in the file list, then use **Set Primary .c**, **Add Other .c**, or **Add Include Folder**. **Include Current Folder** adds the currently displayed Authored folder. Sources are separate from the open editor file, so you can edit a header while compiling selected C sources. Imported files must first be copied to Authored. Compilation uses only the explicitly selected sources and include directories, all within Authored. **Save & Compile** saves current edits first and stops if saving fails. The interface remains responsive during compilation, while editing, file operations, settings, and tool selection are temporarily unavailable.
+
+先在檔案列表選取 Authored 項目，再用 **Set Primary .c**、**Add Other .c** 或 **Add Include Folder** 加入編譯來源；**Include Current Folder** 加入目前顯示的 Authored 資料夾。編譯來源與編輯中的檔案分開，因此可編輯 Header，同時編譯指定的 C 來源。Imported 檔案須先複製至 Authored。編譯只使用明確選取、且位於 Authored 內的來源及 Include 目錄。**Save & Compile** 會先儲存目前編輯內容，儲存失敗即停止。編譯期間介面仍可回應，但暫時禁止編輯、檔案操作、設定及工具選擇。
+
+Compile Output shows success/failure, exit code, standard output, warnings/errors, and cleanup problems. Warnings can accompany success. Editing or saving, changing sources/includes/GCC/workspace, or starting another compilation invalidates the previous result. A failed compilation never restores an older successful result. Known source contents are checked before and after compilation and when refreshing the displayed state. There is no file watcher or complete indirect-header dependency tracking; files changed outside the app may remain undetected until a check. The app retains the compiled result locally only while it remains current; it does not run the program.
+
+Compile Output 顯示成功／失敗、結束代碼、標準輸出、警告／錯誤及清理問題；有警告仍可編譯成功。編輯或儲存、變更來源／Include／GCC／工作區，或開始下一次編譯，都會使舊結果失效。編譯失敗不會恢復使用先前的成功結果。編譯前後與更新顯示狀態時，會檢查已掌握來源的內容；沒有檔案監看或完整間接 Header 相依追蹤，外部變更可能直到檢查時才被發現。應用程式僅在結果仍有效時於本機保留編譯產物，不會執行程式。
+
 ## Main dependencies / 主要依賴
 
 | Component / 元件 | Dependencies and purpose / 依賴與用途 |
 | --- | --- |
-| Desktop UI / 桌面介面 | React, TypeScript, Vite; `@tauri-apps/api` for commands / 呼叫 Commands |
+| Desktop UI / 桌面介面 | React, TypeScript, Vite; Monaco Editor for local text editing; `@tauri-apps/api` for commands and window events / 本機文字編輯、呼叫 Commands 與視窗事件 |
 | Desktop host / 桌面宿主 | Tauri 2; `tauri-plugin-dialog` and `@tauri-apps/plugin-dialog` for native selection / 原生選擇視窗 |
-| Workspace / 工作區 | `serde`, `serde_json` for local preferences; `tempfile` for atomic settings replacement and write probes; `same-file` for cleanup ownership / 本機偏好、原子替換設定與寫入檢查、清理歸屬檢查 |
+| Workspace / 工作區 | `serde`, `serde_json` for local preferences; `tempfile` for settings/file replacement and write probes; `same-file` for cleanup ownership / 本機偏好、設定／檔案替換與寫入檢查、清理歸屬檢查 |
 | Filename transport / 檔名傳遞 | `percent-encoding` preserves native filename bytes between the UI and Rust / 保留 UI 與 Rust 之間傳遞的原始檔名位元組 |
 | Rust Core direct dependencies / Rust Core 直接依賴 | `same-file`, `tempfile`; Linux `libc`; Windows `windows-sys` for process and filesystem APIs / 程序及檔案系統 API |
 | External toolchains / 外部工具鏈 | GCC and GDB are not bundled or automatically installed / GCC 與 GDB 不隨 Desktop 內建，也不自動安裝 |
 
-Only the dialog open permission is granted. The dialog plugin brings `tauri-plugin-fs` transitively; Desktop does not expose frontend filesystem permissions or use it for workspace operations. Monaco is not included. Exact versions are recorded in the Rust and npm lockfiles.
+Permissions allow native file selection and window close confirmation for unsaved changes. The dialog plugin brings `tauri-plugin-fs` transitively; Desktop does not expose frontend filesystem permissions or use it for workspace operations. Monaco and its worker are bundled locally without a CDN. Its styles require inline styles in the content security policy; script sources remain restricted. Monaco is MIT-licensed; exact dependency versions are recorded in the Rust and npm lockfiles.
 
-僅授予 Dialog 開啟權限。Dialog Plugin 間接依賴 `tauri-plugin-fs`；Desktop 未開放前端檔案系統權限，也不用它處理 Workspace 操作。目前未包含 Monaco；確切版本記錄於 Rust 與 npm Lockfile。
+權限僅提供原生檔案選擇，以及未儲存內容的關閉確認。Dialog Plugin 間接依賴 `tauri-plugin-fs`；Desktop 未開放前端檔案系統權限，也不用它處理 Workspace 操作。Monaco 及其背景工作程式隨應用程式於本機載入，不使用 CDN；其樣式需要內容安全政策允許行內樣式，腳本來源仍受限制。Monaco 採 MIT 授權；確切相依版本記錄於 Rust 與 npm Lockfile。
 
 ## Repository / 專案結構
 
@@ -163,6 +181,10 @@ cargo build --locked --manifest-path src-tauri/Cargo.toml
 Build the frontend before direct Cargo checks of Tauri. No frontend test suite is currently defined. Desktop workspace tests cover persistence, root and link boundaries, import/copy protection, New File restrictions, and failed-copy cleanup using synthetic temporary files. Default Core tests cover path boundaries, artifact cleanup errors (Windows), and compiler process supervision without requiring GCC/GDB. The Windows path-alias test creates temporary junctions and requires an environment permitting that operation.
 
 直接執行 Tauri 的 Cargo 檢查前，請先建置前端。目前未建立前端測試套件。Desktop Workspace 測試使用暫存合成檔案，涵蓋設定保存、根目錄與連結邊界、匯入／複製保護、New File 限制，以及複製失敗清理。Core 預設測試涵蓋路徑邊界、產物清理錯誤（Windows）及編譯程序管理，不需要 GCC/GDB。Windows 路徑別名測試會建立暫存 Junction，執行環境須允許此操作。
+
+Desktop tests also cover UTF-8 read/save, external-change conflicts, unsaved edits, source boundaries, and rejection of conflicting operations. A separate opt-in Desktop compilation test uses an existing GCC to check single/multiple sources, warnings, failed builds, and result invalidation without running compiled programs. From `apps/desktop`, set `CODELEARN_TEST_GCC` to an absolute GCC path and run `cargo test --locked --manifest-path src-tauri/Cargo.toml desktop_compile_tracks -- --ignored --nocapture`; optionally provide `CODELEARN_TEST_GDB` to check GDB selection too. Native editor interactions still require GUI validation on Windows and Linux.
+
+Desktop 測試也涵蓋 UTF-8 讀寫、外部修改衝突、未儲存編輯、來源邊界，以及衝突操作的拒絕。另有需明確啟用的 Desktop 編譯測試，使用既有 GCC 驗證單檔／多檔、警告、失敗編譯及結果失效，不執行編譯產出的程式。在 `apps/desktop` 設定 `CODELEARN_TEST_GCC` 為 GCC 絕對路徑，再執行 `cargo test --locked --manifest-path src-tauri/Cargo.toml desktop_compile_tracks -- --ignored --nocapture`；亦可提供 `CODELEARN_TEST_GDB` 檢查 GDB 選擇。原生編輯器互動仍須於 Windows 與 Linux 進行 GUI 驗證。
 
 Real GCC checks are opt-in: set `CODELEARN_TEST_GCC` to an existing absolute GCC path, then run `cargo test --workspace --locked --test build -- --ignored --nocapture`. Optionally set `CODELEARN_TEST_GDB` to check a real GDB, and `CODELEARN_TEST_REQUIRE_PATH=1` to require the selected GCC to also be discovered through the current PATH. These checks compile synthetic sources without executing the resulting programs. Tools are never installed automatically.
 
