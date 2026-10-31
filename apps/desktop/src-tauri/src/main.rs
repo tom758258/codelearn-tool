@@ -9,9 +9,7 @@ use codelearn_tool_core::{build, toolchain};
 use compile::{Desktop, DesktopState, Document, Targets, ToolKind, View, lock};
 use std::{path::PathBuf, sync::Mutex};
 use tauri::Manager;
-use workspace::{
-    Area, Course, Library, Listing, Preferences, Result, Settings, Unit, UnitKey, Workspace,
-};
+use workspace::{Course, Library, Preferences, Result, Settings, Unit, UnitKey, Workspace};
 
 async fn with_desktop<T: Send + 'static>(
     app: tauri::AppHandle,
@@ -110,49 +108,6 @@ async fn apply_workspace_settings(
 ) -> Result<Settings> {
     with_desktop(app, move |state| {
         lock(state)?.apply(preferences, discard_changes)
-    })
-    .await
-}
-
-#[tauri::command]
-async fn list_workspace_entries(
-    app: tauri::AppHandle,
-    area: Area,
-    relative_path: String,
-) -> Result<Listing> {
-    with_desktop(app, move |state| {
-        lock(state)?.workspace.list(area, &relative_path)
-    })
-    .await
-}
-
-#[tauri::command]
-async fn import_to_workspace(app: tauri::AppHandle, source: PathBuf) -> Result<()> {
-    with_desktop(app, move |state| lock(state)?.workspace.import(source)).await
-}
-
-#[tauri::command]
-async fn copy_to_authored(app: tauri::AppHandle, relative_path: String) -> Result<()> {
-    with_desktop(app, move |state| {
-        let mut desktop = lock(state)?;
-        desktop.invalidate();
-        desktop.workspace.copy_to_authored(&relative_path)
-    })
-    .await
-}
-
-#[tauri::command]
-async fn create_authored_file(
-    app: tauri::AppHandle,
-    parent_relative_path: String,
-    filename: String,
-) -> Result<()> {
-    with_desktop(app, move |state| {
-        let mut desktop = lock(state)?;
-        desktop.invalidate();
-        desktop
-            .workspace
-            .create_file(&parent_relative_path, &filename)
     })
     .await
 }
@@ -341,10 +296,6 @@ fn main() {
             reset_exercise,
             restore_toolchains,
             apply_workspace_settings,
-            list_workspace_entries,
-            import_to_workspace,
-            copy_to_authored,
-            create_authored_file,
             read_authored_file,
             save_authored_file,
             set_editor_dirty,

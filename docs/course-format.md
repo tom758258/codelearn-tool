@@ -10,11 +10,11 @@ A course is a complete folder containing `course.json`, Markdown reading section
 
 `id` 與 `version` 識別課程版本，不允許重複匯入相同組合。不同版本保留各自的原始教材與學生作業。課程、章節與區塊 ID 使用 1–48 個 ASCII 小寫字母、數字、連字號或底線。章節 ID 在課程內不可重複；區塊 ID 在同一章節內不可重複。陣列順序就是章節與區塊順序。標題用於顯示，可包含 Unicode。
 
-- A `content` block has an `id` and `markdown`, relative to the course folder. Each block references its own `.md` file. Fenced code is for reading only.
+- A `content` block has an `id` and `markdown`, relative to the course folder. Each block references a separate physical `.md` file, including across chapters. Fenced code is for reading only.
 - A `program` block has an `id`, `title`, `directory`, `files`, and `targets`. `directory` is relative to the course folder; `files` and compile paths are relative to that directory. Files must be UTF-8 `.c` or `.h` files. List every file needed by that exercise.
 - `targets.primary` is one listed `.c` file. `targets.additional` lists other distinct `.c` files to link into the same program. `targets.includes` lists include directories containing exercise files; `.` means the exercise directory. Use empty arrays when no additional sources or include directories are needed.
 
-- `content` 區塊包含 `id` 與相對於課程資料夾的 `markdown`。每個區塊引用自己的 `.md`；程式碼區塊只供閱讀。
+- `content` 區塊包含 `id` 與相對於課程資料夾的 `markdown`。每個區塊必須引用獨立的實體 `.md` 檔案，跨章節也不可共用；程式碼區塊只供閱讀。
 - `program` 區塊包含 `id`、`title`、`directory`、`files` 與 `targets`。`directory` 相對於課程資料夾；`files` 與編譯路徑相對於該目錄。檔案必須是 UTF-8 `.c` 或 `.h`，並列出練習需要的所有檔案。
 - `targets.primary` 指定一個已列出的 `.c`；`targets.additional` 列出其他不重複的 `.c`，共同連結成同一個程式；`targets.includes` 列出含練習檔案的 Include 目錄，`.` 表示練習目錄。不需要額外來源或目錄時使用空陣列。
 
@@ -24,9 +24,9 @@ Paths in `course.json` use `/` and must stay inside their specified folder. Abso
 
 ## Reading and exercises / 閱讀與練習
 
-Markdown uses CommonMark through `react-markdown`. Raw HTML is ignored. Images are resolved relative to the Markdown file and must remain within the same course; PNG, JPEG, GIF, and WebP are supported. Remote images, SVG, scripts, and automatic navigation are not supported. Links display their text and destination without opening a website. Reading a course never compiles or executes its code.
+Markdown uses CommonMark through `react-markdown`. Raw HTML is ignored. Images are resolved relative to the Markdown file and must remain within the same course; PNG, JPEG, GIF, and WebP are supported. Inline and reference-style images are checked during import using the same path and format rules as reading; an invalid image reference rejects the import and identifies the Markdown file, line, and image destination. Remote images, SVG, scripts, and automatic navigation are not supported. Links display their text and destination without opening a website. Reading a course never compiles or executes its code.
 
-Markdown 透過 `react-markdown` 使用 CommonMark，忽略原始 HTML。圖片相對於 Markdown 所在位置解析，且必須留在同一課程內；支援 PNG、JPEG、GIF 與 WebP。不支援遠端圖片、SVG、腳本或自動導覽。連結顯示文字與目的位置，不開啟網站。閱讀課程不會編譯或執行程式。
+Markdown 透過 `react-markdown` 使用 CommonMark，忽略原始 HTML。圖片相對於 Markdown 所在位置解析，且必須留在同一課程內；支援 PNG、JPEG、GIF 與 WebP。匯入時會檢查行內及參照式圖片，使用與閱讀時相同的路徑及格式規則；圖片引用不合法時拒絕匯入，並指出 Markdown 檔案、行號與圖片目的位置。不支援遠端圖片、SVG、腳本或自動導覽。連結顯示文字與目的位置，不開啟網站。閱讀課程不會編譯或執行程式。
 
 Opening an exercise for the first time copies only its listed source files into independent student work. Later opens reuse that saved work. Course exercises do not provide file creation, deletion, or renaming. **Reset exercise** restores those supplied files from the same course version after confirmation; extra files, other exercises, and other versions remain untouched. A reset failure is reported and can leave some supplied files already restored. It does not clear editor buffers on failure.
 

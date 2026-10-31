@@ -1,6 +1,7 @@
 //! Course originals, independent exercises, and imported project metadata.
 use super::*;
 use crate::compile::Targets;
+use pulldown_cmark::{Event, Parser, Tag};
 use std::collections::HashSet;
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -184,6 +185,40 @@ fn targets_under(root: &str, targets: &Targets) -> Result<Targets> {
     })
 }
 
+fn read_course_image(root: &Path, markdown: &str, reference: &str) -> Result<Vec<u8>> {
+    let decoded = percent_decode_str(reference)
+        .decode_utf8()
+        .map_err(|_| "Invalid image path")?;
+    if decoded.starts_with('/') || decoded.contains([':', '\\', '\0', '?', '#']) {
+        return Err("Images must reference files inside this course".into());
+    }
+    let mut relative = manifest_path(markdown, false)?
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    for part in decoded.split('/') {
+        match part {
+            ".." => {
+                if !relative.pop() {
+                    return Err("Image path escapes the course".into());
+                }
+            }
+            "." => (),
+            _ => relative.push(manifest_path(part, false)?),
+        }
+    }
+    let bytes = fs::read(checked_path(root, &relative)?).map_err(|e| e.to_string())?;
+    if !(bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+        || bytes.starts_with(b"\xff\xd8\xff")
+        || bytes.starts_with(b"GIF87a")
+        || bytes.starts_with(b"GIF89a")
+        || (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP")))
+    {
+        return Err("Course images must be PNG, JPEG, GIF or WebP".into());
+    }
+    Ok(bytes)
+}
+
 fn load_course(root: &Path) -> Result<Course> {
     let path = checked_path(root, Path::new("course.json"))?;
     let course: Course = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
@@ -196,6 +231,7 @@ fn load_course(root: &Path) -> Result<Course> {
         return Err("A course needs a version, title and at least one chapter".into());
     }
     let mut chapters = HashSet::new();
+    let mut markdown_files = HashSet::new();
     for chapter in &course.chapters {
         identifier(&chapter.id)?;
         if !chapters.insert(&chapter.id)
@@ -216,8 +252,27 @@ fn load_course(root: &Path) -> Result<Course> {
                     if path.extension().is_none_or(|ext| ext != "md") {
                         return Err("Content must reference a Markdown (.md) file".into());
                     }
-                    fs::read_to_string(path)
+                    if !markdown_files
+                        .insert(same_file::Handle::from_path(&path).map_err(|e| e.to_string())?)
+                    {
+                        return Err(format!(
+                            "Content blocks must use separate Markdown files: {markdown}"
+                        ));
+                    }
+                    let text = fs::read_to_string(path)
                         .map_err(|e| format!("Cannot read course text: {e}"))?;
+                    for (event, offset) in Parser::new(&text).into_offset_iter() {
+                        if let Event::Start(Tag::Image { dest_url, .. }) = event {
+                            read_course_image(root, markdown, &dest_url).map_err(|e| {
+                                let line =
+                                    text[..offset.start].bytes().filter(|b| *b == b'\n').count()
+                                        + 1;
+                                format!(
+                                    "Invalid image {dest_url:?} in {markdown} at line {line}: {e}"
+                                )
+                            })?;
+                        }
+                    }
                 }
                 Block::Program {
                     title,
@@ -420,38 +475,8 @@ impl Workspace {
         let Block::Content { markdown, .. } = find_block(&course, chapter, block)? else {
             return Err("Choose a reading section".into());
         };
-        let decoded = percent_decode_str(reference)
-            .decode_utf8()
-            .map_err(|_| "Invalid image path")?;
-        if decoded.starts_with('/') || decoded.contains([':', '\\', '\0', '?', '#']) {
-            return Err("Images must reference files inside this course".into());
-        }
-        let mut relative = manifest_path(markdown, false)?
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        for part in decoded.split('/') {
-            match part {
-                ".." => {
-                    if !relative.pop() {
-                        return Err("Image path escapes the course".into());
-                    }
-                }
-                "." => (),
-                _ => relative.push(manifest_path(part, false)?),
-            }
-        }
         let root = checked_path(&self.area(Area::Imported)?, Path::new(key))?;
-        let bytes = fs::read(checked_path(&root, &relative)?).map_err(|e| e.to_string())?;
-        if !(bytes.starts_with(b"\x89PNG\r\n\x1a\n")
-            || bytes.starts_with(b"\xff\xd8\xff")
-            || bytes.starts_with(b"GIF87a")
-            || bytes.starts_with(b"GIF89a")
-            || (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP")))
-        {
-            return Err("Course images must be PNG, JPEG, GIF or WebP".into());
-        }
-        Ok(bytes)
+        read_course_image(&root, markdown, reference)
     }
 
     pub fn unit(&self, key: UnitKey) -> Result<Unit> {
@@ -752,6 +777,37 @@ mod tests {
             .unwrap(),
             original
         );
+        let catalog = workspace.area(Area::Library).unwrap().join("catalog.json");
+        let catalog_before = fs::read(&catalog).unwrap();
+        let text_path = source.join("chapters/basics/welcome.md");
+        let text_before = fs::read(&text_path).unwrap();
+        next.version = "1.2".into();
+        fs::write(
+            source.join("course.json"),
+            serde_json::to_vec(&next).unwrap(),
+        )
+        .unwrap();
+        fs::write(&text_path, "![Missing](images/missing.png)").unwrap();
+        assert!(workspace.import_learning(source.clone(), true).is_err());
+        assert_eq!(fs::read(catalog).unwrap(), catalog_before);
+        assert_eq!(
+            workspace.read_authored(path).unwrap(),
+            "// saved student work\n"
+        );
+        for entry in &library.courses {
+            assert_eq!(
+                fs::read(
+                    workspace
+                        .area(Area::Imported)
+                        .unwrap()
+                        .join(&entry.key)
+                        .join("chapters/basics/welcome.md")
+                )
+                .unwrap(),
+                text_before
+            );
+        }
+        fs::write(text_path, text_before).unwrap();
         let extra = workspace
             .authored_path(&a.root, true)
             .unwrap()
@@ -854,6 +910,106 @@ mod tests {
         )
         .unwrap();
         assert!(workspace.import_learning(source.clone(), true).is_err());
+        fs::write(source.join("course.json"), &manifest).unwrap();
+        let markdown = "chapters/basics/welcome.md";
+        let text_path = source.join(markdown);
+        let original_text = fs::read(&text_path).unwrap();
+        let valid_images = concat!(
+            "![Inline](images/steps.png)\n",
+            "![Full reference][figure]\n![Collapsed][]\n![Shortcut]\n",
+            "\n[FIGURE]: images/steps.png \"Figure title\"\n",
+            "[Collapsed]: <images/steps.png>\n[Shortcut]: images/steps.png\n",
+            "![Encoded](images/%73teps.png)\n",
+            "![Parent](../basics/images/steps.png)\n",
+            "`![Code](missing-code.png)`\n\n```md\n![Code](missing-fenced.png)\n```\n",
+            "\n<!-- ![Comment](missing-comment.png) -->\n",
+            "<img src=\"missing-html.png\">\n",
+            "![Undefined][not-defined]\n"
+        );
+        fs::write(source.join("chapters/basics/images/vector.svg"), "<svg/>").unwrap();
+        fs::write(&text_path, valid_images).unwrap();
+        assert!(load_course(&source).is_ok());
+        for text in [
+            "![Missing](images/missing.png)",
+            "![Missing][figure]\n\n[figure]: images/missing.png",
+            "![Missing][]\n\n[Missing]: images/missing.png",
+            "![Missing]\n\n[Missing]: images/missing.png",
+            "![Outside](../../../outside.png)",
+            "![Outside](%2e%2e/%2e%2e/%2e%2e/outside.png)",
+            "![Absolute](/outside.png)",
+            "![Remote](https://example.com/image.png)",
+            "![File](file:///outside.png)",
+            "![Source](exercises/hello/main.c)",
+            "![Vector](images/vector.svg)",
+        ] {
+            fs::write(&text_path, text).unwrap();
+            let error = workspace
+                .import_learning(source.clone(), true)
+                .err()
+                .unwrap();
+            assert!(error.contains(markdown), "{error}");
+            assert!(error.contains("image"), "{error}");
+            assert!(workspace.library().unwrap().courses.is_empty());
+            assert!(
+                fs::read_dir(workspace.area(Area::Imported).unwrap())
+                    .unwrap()
+                    .next()
+                    .is_none()
+            );
+        }
+        fs::write(&text_path, original_text).unwrap();
+        let alias = "chapters/alias.md";
+        fs::hard_link(source.join(markdown), source.join(alias)).unwrap();
+        let duplicate_paths = [
+            markdown,
+            alias,
+            #[cfg(windows)]
+            "chapters/BASICS/WELCOME.md",
+        ];
+        for path in duplicate_paths {
+            let mut invalid = original.clone();
+            invalid["chapters"][0]["blocks"][2]["markdown"] = path.into();
+            fs::write(
+                source.join("course.json"),
+                serde_json::to_vec(&invalid).unwrap(),
+            )
+            .unwrap();
+            let error = workspace
+                .import_learning(source.clone(), true)
+                .err()
+                .unwrap();
+            assert!(error.contains("separate Markdown files"), "{error}");
+        }
+        let mut cross_chapter = original.clone();
+        cross_chapter["chapters"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "id": "other", "title": "Other", "blocks": [
+                    {"kind": "content", "id": "reading", "markdown": markdown}
+                ]
+            }));
+        fs::write(
+            source.join("course.json"),
+            serde_json::to_vec(&cross_chapter).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            workspace
+                .import_learning(source.clone(), true)
+                .err()
+                .unwrap()
+                .contains("separate Markdown files")
+        );
+        fs::create_dir(source.join("other")).unwrap();
+        fs::write(source.join("other/welcome.md"), "Independent reading").unwrap();
+        cross_chapter["chapters"][1]["blocks"][0]["markdown"] = "other/welcome.md".into();
+        fs::write(
+            source.join("course.json"),
+            serde_json::to_vec(&cross_chapter).unwrap(),
+        )
+        .unwrap();
+        assert!(load_course(&source).is_ok());
         fs::write(source.join("course.json"), manifest).unwrap();
         let outside = source.parent().unwrap().join("outside");
         fs::create_dir(&outside).unwrap();
@@ -870,7 +1026,11 @@ mod tests {
                 .status
                 .success()
         );
-        assert!(workspace.import_learning(source, true).is_err());
+        fs::write(outside.join("outside.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+        fs::write(&text_path, "![Linked](../../linked/outside.png)").unwrap();
+        let error = workspace.import_learning(source, true).err().unwrap();
+        assert!(error.contains("Invalid image"), "{error}");
+        assert!(error.contains(markdown), "{error}");
         assert!(workspace.library().unwrap().courses.is_empty());
     }
 }
