@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod compile;
+mod debug;
 mod run;
 mod workspace;
 
@@ -8,7 +9,9 @@ use codelearn_tool_core::{build, toolchain};
 use compile::{Desktop, DesktopState, Document, Targets, ToolKind, View, lock};
 use std::{path::PathBuf, sync::Mutex};
 use tauri::Manager;
-use workspace::{Area, Listing, Preferences, Result, Settings, Workspace};
+use workspace::{
+    Area, Course, Library, Listing, Preferences, Result, Settings, Unit, UnitKey, Workspace,
+};
 
 async fn with_desktop<T: Send + 'static>(
     app: tauri::AppHandle,
@@ -22,6 +25,81 @@ async fn with_desktop<T: Send + 'static>(
 #[tauri::command]
 async fn get_workspace_settings(app: tauri::AppHandle) -> Result<Settings> {
     with_desktop(app, |state| Ok(lock(state)?.workspace.settings())).await
+}
+
+#[tauri::command]
+async fn get_library(app: tauri::AppHandle) -> Result<Library> {
+    with_desktop(app, |state| lock(state)?.workspace.library()).await
+}
+
+#[tauri::command]
+async fn import_learning(app: tauri::AppHandle, source: PathBuf, course: bool) -> Result<Library> {
+    with_desktop(app, move |state| {
+        lock(state)?.workspace.import_learning(source, course)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn get_course(app: tauri::AppHandle, key: String) -> Result<Course> {
+    with_desktop(app, move |state| lock(state)?.workspace.course(&key)).await
+}
+
+#[tauri::command]
+async fn get_course_content(
+    app: tauri::AppHandle,
+    key: String,
+    chapter: String,
+    block: String,
+) -> Result<String> {
+    with_desktop(app, move |state| {
+        lock(state)?.workspace.content(&key, &chapter, &block)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn get_course_image(
+    app: tauri::AppHandle,
+    key: String,
+    chapter: String,
+    block: String,
+    reference: String,
+) -> Result<Vec<u8>> {
+    // Reading images does not mutate the selected exercise or its process.
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<DesktopState>()
+            .read_image(&key, &chapter, &block, &reference)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn open_unit(
+    app: tauri::AppHandle,
+    key: Option<UnitKey>,
+    discard_changes: bool,
+) -> Result<Option<Unit>> {
+    with_desktop(app, move |state| {
+        lock(state)?.activate(key, discard_changes)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn reset_exercise(app: tauri::AppHandle, discard_changes: bool) -> Result<Unit> {
+    with_desktop(app, move |state| lock(state)?.reset(discard_changes)).await
+}
+
+#[tauri::command]
+async fn restore_toolchains(app: tauri::AppHandle) -> Result<View> {
+    with_desktop(app, |state| {
+        let mut desktop = lock(state)?;
+        desktop.restore_tools();
+        Ok(desktop.view())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -194,6 +272,41 @@ fn get_run_state(state: tauri::State<'_, DesktopState>) -> run::RunStatus {
     state.run_control.status()
 }
 
+#[tauri::command]
+async fn debug_program(
+    app: tauri::AppHandle,
+    id: String,
+    stdin: String,
+    breakpoints: Vec<debug::BreakpointRequest>,
+) -> Result<Result<debug::DebugOutput>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<DesktopState>().debug(id, stdin, breakpoints)
+    })
+    .await
+    .map_err(|e| format!("The debug command could not finish: {e}"))
+}
+
+#[tauri::command]
+fn stop_debug(state: tauri::State<'_, DesktopState>, id: String) -> bool {
+    state.debug_control.stop(Some(&id))
+}
+
+#[tauri::command]
+fn get_debug_state(state: tauri::State<'_, DesktopState>) -> debug::DebugStatus {
+    state.debug_control.status()
+}
+
+#[tauri::command]
+async fn debug_action(app: tauri::AppHandle, id: String, action: debug::Action) -> Result<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<DesktopState>()
+            .debug_control
+            .command(&id, action)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -208,7 +321,8 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event
-                && window.state::<DesktopState>().run_control.stop()
+                && (window.state::<DesktopState>().run_control.stop()
+                    | window.state::<DesktopState>().debug_control.stop(None))
             {
                 // React waits for the result and handles cleanup/unsaved-edit
                 // confirmation. A missing frontend waiter cannot terminate the
@@ -218,6 +332,14 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             get_workspace_settings,
+            get_library,
+            import_learning,
+            get_course,
+            get_course_content,
+            get_course_image,
+            open_unit,
+            reset_exercise,
+            restore_toolchains,
             apply_workspace_settings,
             list_workspace_entries,
             import_to_workspace,
@@ -235,6 +357,10 @@ fn main() {
             run_program,
             stop_run,
             get_run_state,
+            debug_program,
+            stop_debug,
+            get_debug_state,
+            debug_action,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run CodeLearn Tool");

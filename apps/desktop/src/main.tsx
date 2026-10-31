@@ -3,536 +3,359 @@ import { createRoot } from 'react-dom/client'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-dialog'
-import Editor from './Editor'
+import CourseText from './CourseText'
+import Workbench from './Workbench'
+import SettingsPanel from './SettingsPanel'
+import type { Breakpoint, CompileState, Course, DebugAction, DebugOutput, DebugStatus, Document, Library, OpenDocument, RunOutput, RunStatus, Settings, Targets, Unit, UnitKey } from './types'
 import codelearnIcon from '../src-tauri/icons/codelearn-icon.png'
 import './styles.css'
 
-type Area = 'Imported' | 'Authored'
-type Preferences = { workspace_root: string | null; temp_root: string | null }
-type Settings = {
-  preferences: Preferences
-  default_workspace_root: string
-  default_temp_root: string
-  resolved_workspace_root: string | null
-  resolved_temp_root: string | null
-  error: string | null
-}
-type Entry = { name: string; relative_path: string; is_directory: boolean; blocked: boolean }
-type Listing = { path: string; displayPath: string; entries: Entry[]; selected: string | null }
-type DirectoryEntries = { display_path: string; entries: Entry[] }
-type Document = { relative_path: string; display_path: string; content: string }
-type OpenDocument = Document & { value: string; generation: number }
-type Targets = { primary: string | null; additional: string[]; includes: string[] }
-type Tool = 'GCC' | 'GDB'
-type SelectedTool = { path: string; version: string | null }
-type Candidate = { id: number; tool: Tool; path: string; origin: string; version: string | null; usable: boolean; error: string | null; details: string }
-type CompileState = {
-  targets: Targets
-  candidates: Candidate[]
-  gcc: SelectedTool | null
-  gdb: SelectedTool | null
-  build_valid: boolean
-  output: { success: boolean; exit_code: number | null; stdout: string; stderr: string; error: string | null; cleanup_errors: string[] } | null
-  cleanup_errors: string[]
-}
-type RunOutput = {
-  outcome: 'Exited' | 'Stopped' | 'Timeout' | 'OutputLimit' | 'ProcessError' | null
-  exit_code: number | null
-  stdout: string
-  stderr: string
-  start_error: string | null
-  process_errors: string[]
-  cleanup_errors: string[]
-  working_directory: string | null
-}
-type RunStatus = { active: boolean; output: RunOutput | null; error: string | null }
-type RunReply = { Ok: RunOutput } | { Err: string }
-type ActiveRun = { done: Promise<void>; stopTask: Promise<void> | null; submitted: boolean; settled: boolean; stopRequested: boolean }
-type Choice = 'save' | 'discard' | 'cancel' | 'close'
-type Question = { kind: 'save' | 'cleanup'; text: string }
-const pause = (milliseconds: number) => new Promise<void>(resolve => window.setTimeout(resolve, milliseconds))
-const emptyListing = (): Listing => ({ path: '', displayPath: '', entries: [], selected: null })
-const emptyCompile = (): CompileState => ({ targets: { primary: null, additional: [], includes: [] }, candidates: [], gcc: null, gdb: null, build_valid: false, output: null, cleanup_errors: [] })
-const isDirty = (document: OpenDocument | null) => document !== null && document.value !== document.content
-// Display undecodable native filename bytes without changing their command identity.
-const displayPath = (path: string) => new TextDecoder().decode(Uint8Array.from(
-  path.match(/%[0-9a-f]{2}|./gi) ?? [], part => part.startsWith('%') ? parseInt(part.slice(1), 16) : part.charCodeAt(0),
-))
+type Choice = 'save' | 'discard' | 'cancel' | 'confirm'
+type Question = { kind: 'save' | 'cleanup' | 'reset'; text: string }
+type Session = { id: string; kind: 'run' | 'debug'; done: Promise<void>; stopTask: Promise<void> | null; submitted: boolean; settled: boolean; stopRequested: boolean }
+type Reply<T> = { Ok: T } | { Err: string }
+const pause = (ms: number) => new Promise<void>(resolve => window.setTimeout(resolve, ms))
+const emptyCompile = (): CompileState => ({ targets: { primary: null, additional: [], includes: [] }, candidates: [], gcc: null, gdb: null, build_valid: false, output: null, cleanup_errors: [], tool_errors: [] })
+const dirty = (doc: OpenDocument) => doc.value !== doc.content
 
 function App() {
+  const [page, setPage] = useState<'Courses' | 'Projects' | 'Settings'>('Courses')
   const [settings, setSettings] = useState<Settings | null>(null)
-  const [draft, setDraft] = useState<Preferences>({ workspace_root: null, temp_root: null })
-  const [imported, setImported] = useState<Listing>(emptyListing)
-  const [authored, setAuthored] = useState<Listing>(emptyListing)
-  const [filename, setFilename] = useState('')
-  const [operationBusy, setBusy] = useState(true)
+  const [library, setLibrary] = useState<Library>({ courses: [], projects: [] })
+  const [course, setCourse] = useState<{ key: string; data: Course; chapter: string; text: Record<string, string> } | null>(null)
+  const [unit, setUnit] = useState<Unit | null>(null)
+  const [documents, setDocuments] = useState<Record<string, OpenDocument>>({})
+  const [activeFile, setActiveFile] = useState('')
+  const [compilation, setCompilation] = useState<CompileState>(emptyCompile)
+  const [busy, setBusy] = useState(true)
   const [closing, setClosing] = useState(false)
   const [activity, setActivity] = useState('Loading…')
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
-  const [document, setDocument] = useState<OpenDocument | null>(null)
-  const [compilation, setCompilation] = useState<CompileState>(emptyCompile)
-  const [tool, setTool] = useState<Tool>('GCC')
-  const [toolPath, setToolPath] = useState('')
   const [question, setQuestion] = useState<Question | null>(null)
   const [stdin, setStdin] = useState('')
-  const [runPhase, setRunPhase] = useState<'idle' | 'running' | 'stopping'>('idle')
   const [runOutput, setRunOutput] = useState<RunOutput | null>(null)
+  const [debugView, setDebugView] = useState<DebugStatus | null>(null)
+  const [sessionKind, setSessionKind] = useState<'run' | 'debug' | null>(null)
+  const [stopping, setStopping] = useState(false)
+  const [debugBusy, setDebugBusy] = useState(false)
+  const [breakpoints, setBreakpoints] = useState<Breakpoint[]>([])
   const [cleanupWarnings, setCleanupWarnings] = useState<string[]>([])
-  const pendingCleanup = useRef<string[]>([])
-  const activeRun = useRef<ActiveRun | null>(null)
+  const docs = useRef<Record<string, OpenDocument>>({})
+  const operating = useRef(true)
+  const updates = useRef<Promise<void>>(Promise.resolve())
+  const activeSession = useRef<Session | null>(null)
   const closePending = useRef(false)
-  const running = useRef(true)
-  const currentDocument = useRef<OpenDocument | null>(null)
-  const editorUpdates = useRef<Promise<void>>(Promise.resolve())
+  const allowClose = useRef(false)
+  const pendingCleanup = useRef<string[]>([])
   const dialog = useRef<HTMLDialogElement>(null)
   const answer = useRef<((choice: Choice) => void) | null>(null)
   const closeAction = useRef<() => void>(() => {})
-  const allowClose = useRef(false)
-  const busy = operationBusy || closing
+  const locked = busy || closing
   const ready = settings !== null && settings.error === null
-  const dirty = isDirty(document)
-  const selected = authored.entries.find(entry => entry.relative_path === authored.selected)
-  const selectedSource = selected && !selected.blocked && !selected.is_directory && selected.name.endsWith('.c')
 
-  function updateDocument(value: OpenDocument | null) {
-    currentDocument.current = value
-    setDocument(value)
-  }
-
-  async function readListing(area: Area, path: string) {
-    const setListing = area === 'Imported' ? setImported : setAuthored
-    const result = await invoke<DirectoryEntries>('list_workspace_entries', { area, relativePath: path })
-    setListing({ path, displayPath: result.display_path, entries: result.entries, selected: null })
-  }
-
-  async function refresh(importedPath = imported.path, authoredPath = authored.path) {
-    await readListing('Imported', importedPath)
-    await readListing('Authored', authoredPath)
-  }
-
-  async function syncEditor() {
-    await editorUpdates.current
-    const current = currentDocument.current
-    if (current) await invoke('set_editor_dirty', { relativePath: current.relative_path, dirty: isDirty(current) })
-  }
-
-  async function perform(action: () => Promise<void>, label = 'Working…') {
-    if (running.current) return
-    running.current = true
-    setBusy(true)
-    setActivity(label)
-    setError('')
-    setMessage('')
-    try { await syncEditor(); await action() }
-    catch (cause) { setError(String(cause)) }
-    finally {
-      try { setCompilation(await invoke<CompileState>('get_compile_state')) }
-      catch (cause) { setError(previous => previous || String(cause)) }
-      running.current = false
-      setBusy(false)
-      setActivity('')
-    }
-  }
-
-  useEffect(() => {
-    async function load() {
-      try {
-        const current = await invoke<Settings>('get_workspace_settings')
-        setSettings(current)
-        setDraft(current.preferences)
-        if (!current.error) await refresh('', '')
-        setCompilation(await invoke<CompileState>('get_compile_state'))
-      } catch (cause) { setError(String(cause)) }
-      finally { running.current = false; setBusy(false); setActivity('') }
-    }
-    void load()
-    let disposed = false
-    const stop = getCurrentWindow().onCloseRequested(event => {
-      if (allowClose.current) return
-      event.preventDefault()
-      closeAction.current()
-    })
-    void stop.then(unlisten => { if (disposed) unlisten() }).catch(cause => setError(String(cause)))
-    return () => { disposed = true; void stop.then(unlisten => unlisten()).catch(() => {}) }
-  }, [])
-
-  useEffect(() => { if (question && !dialog.current?.open) dialog.current?.showModal() }, [question])
-
-  function choose(choice: Choice) {
-    dialog.current?.close()
-    setQuestion(null)
-    answer.current?.(choice)
-    answer.current = null
-  }
-
-  async function save() {
-    const current = currentDocument.current
-    if (!current) return
-    const saved = await invoke<Document>('save_authored_file', { relativePath: current.relative_path, content: current.value })
-    updateDocument({ ...saved, value: saved.content, generation: current.generation })
-    setMessage('File saved.')
-  }
-
-  async function beforeSwitch(reason: string): Promise<boolean | null> {
-    if (!isDirty(currentDocument.current)) return false
-    setQuestion({ kind: 'save', text: reason })
-    const choice = await new Promise<Choice>(resolve => { answer.current = resolve })
-    if (choice === 'cancel') return null
-    if (choice === 'save') await save()
-    return choice === 'discard'
-  }
-
+  function changeDocs(value: Record<string, OpenDocument>) { docs.current = value; setDocuments(value) }
   function rememberCleanup(errors: string[]) {
     pendingCleanup.current = [...new Set([...pendingCleanup.current, ...errors])]
     setCleanupWarnings(pendingCleanup.current)
   }
-
-  function displayRun(output: RunOutput) {
-    setRunOutput(output)
-    rememberCleanup(output.cleanup_errors.map(error => output.working_directory
-      ? `${error}\nTemporary working directory: ${output.working_directory}` : error))
+  async function refreshCompile() {
+    const view = await invoke<CompileState>('get_compile_state')
+    setCompilation(view)
+    rememberCleanup([...view.cleanup_errors, ...(view.output?.cleanup_errors ?? [])])
   }
-
+  async function syncEditor() {
+    await updates.current
+    for (const doc of Object.values(docs.current)) await invoke('set_editor_dirty', { relativePath: doc.relative_path, dirty: dirty(doc) })
+  }
+  async function perform(action: () => Promise<void>, label = 'Working…') {
+    if (operating.current) return
+    operating.current = true; setBusy(true); setActivity(label); setError(''); setMessage('')
+    try { await syncEditor(); await action() }
+    catch (cause) { setError(String(cause)) }
+    finally {
+      try { await syncEditor(); await refreshCompile() } catch (cause) { setError(previous => previous || String(cause)) }
+      operating.current = false; setBusy(false); setActivity('')
+    }
+  }
+  useEffect(() => {
+    void (async () => {
+      try {
+        const current = await invoke<Settings>('get_workspace_settings')
+        setSettings(current)
+        if (!current.error) setLibrary(await invoke<Library>('get_library'))
+        setCompilation(await invoke<CompileState>('restore_toolchains'))
+      } catch (cause) { setError(String(cause)) }
+      finally { operating.current = false; setBusy(false); setActivity('') }
+    })()
+    let disposed = false
+    const stop = getCurrentWindow().onCloseRequested(event => {
+      if (allowClose.current) return
+      event.preventDefault(); closeAction.current()
+    })
+    void stop.then(unlisten => { if (disposed) unlisten() }).catch(cause => setError(String(cause)))
+    return () => { disposed = true; void stop.then(unlisten => unlisten()).catch(() => {}) }
+  }, [])
+  useEffect(() => { if (question && !dialog.current?.open) dialog.current?.showModal() }, [question])
+  function ask(value: Question) {
+    setQuestion(value)
+    return new Promise<Choice>(resolve => { answer.current = resolve })
+  }
+  function choose(choice: Choice) {
+    dialog.current?.close(); setQuestion(null)
+    answer.current?.(choice); answer.current = null
+  }
+  async function saveAll() {
+    for (const doc of Object.values(docs.current)) {
+      if (!dirty(doc)) continue
+      const saved = await invoke<Document>('save_authored_file', { relativePath: doc.relative_path, content: doc.value })
+      changeDocs({ ...docs.current, [doc.relative_path]: { ...saved, value: saved.content, generation: doc.generation } })
+    }
+    setMessage('Changes saved.')
+  }
+  async function beforeSwitch(text: string): Promise<boolean | null> {
+    if (!Object.values(docs.current).some(dirty)) return false
+    const choice = await ask({ kind: 'save', text })
+    if (choice === 'cancel') return null
+    if (choice === 'save') await saveAll()
+    return choice === 'discard'
+  }
+  function clearUnit(next: Unit | null) {
+    setUnit(next); changeDocs({}); setActiveFile(''); setBreakpoints([]); setStdin(''); setRunOutput(null); setDebugView(null)
+  }
+  async function leaveUnit(reason: string) {
+    const discardChanges = await beforeSwitch(reason)
+    if (discardChanges === null) return false
+    await invoke('open_unit', { key: null, discardChanges }); clearUnit(null)
+    return true
+  }
+  function switchPage(next: typeof page) {
+    if (next !== page) void perform(async () => { if (await leaveUnit('Save changes before leaving this exercise or project?')) setPage(next) })
+  }
+  async function loadDocument(path: string, reload = false) {
+    if (!reload && docs.current[path]) return
+    const opened = await invoke<Document>('read_authored_file', { relativePath: path, discardChanges: reload })
+    changeDocs({ ...docs.current, [path]: { ...opened, value: opened.content, generation: (docs.current[path]?.generation ?? 0) + 1 } })
+  }
+  function openFile(path: string) {
+    if (docs.current[path]) { setActiveFile(path); return }
+    void perform(async () => { await loadDocument(path); setActiveFile(path) })
+  }
+  async function setTargets(targets: Targets) { setCompilation(await invoke<CompileState>('set_compile_targets', { targets })) }
+  async function activate(key: UnitKey) {
+    if (JSON.stringify(unit?.key) === JSON.stringify(key)) return
+    const discardChanges = await beforeSwitch('Save changes before opening another exercise or project?')
+    if (discardChanges === null) return
+    const next = await invoke<Unit>('open_unit', { key, discardChanges })
+    clearUnit(next)
+    if (key.kind === 'project' && !next.targets.primary) {
+      const sources = next.files.filter(file => file.name.endsWith('.c'))
+      if (sources.length === 1) await setTargets({ primary: sources[0].relative_path, additional: [], includes: [] })
+    }
+    const first = next.targets.primary ?? next.files[0]?.relative_path
+    if (first) { await loadDocument(first); setActiveFile(first) }
+  }
+  async function showChapter(key: string, data: Course, chapter: string) {
+    const text: Record<string, string> = {}
+    for (const block of data.chapters.find(item => item.id === chapter)!.blocks) if (block.kind === 'content') text[block.id] = await invoke<string>('get_course_content', { key, chapter, block: block.id })
+    setCourse({ key, data, chapter, text })
+  }
+  function openCourse(key: string) {
+    void perform(async () => {
+      const data = await invoke<Course>('get_course', { key })
+      if (await leaveUnit('Save changes before opening this course?')) await showChapter(key, data, data.chapters[0].id)
+    })
+  }
+  function importFolder(isCourse: boolean) {
+    void perform(async () => {
+      const source = await open({ directory: true, multiple: false, title: isCourse ? 'Import Course Folder' : 'Import Project Folder' })
+      if (!source) return
+      setLibrary(await invoke<Library>('import_learning', { source, course: isCourse }))
+      setMessage(isCourse ? 'Course imported. Choose it to start reading.' : 'Project imported. Choose it to edit your copy.')
+    }, 'Importing folder…')
+  }
+  function edit(path: string, value: string) {
+    const current = docs.current[path]
+    const session = activeSession.current
+    if (!current || closePending.current || (operating.current && session?.kind !== 'debug')) return
+    const next = { ...current, value }
+    changeDocs({ ...docs.current, [path]: next })
+    if (dirty(next)) setCompilation(previous => ({ ...previous, build_valid: false }))
+    if (session?.kind === 'debug') { void stopSession(); return }
+    if (dirty(current) !== dirty(next)) updates.current = updates.current.then(() => invoke<void>('set_editor_dirty', { relativePath: path, dirty: dirty(next) })).catch(cause => { setError(String(cause)) })
+  }
   async function recoverRun(cause: unknown): Promise<RunOutput> {
-    // A rejected IPC waiter is not evidence that the Rust worker has stopped.
-    // Retain Busy and Stop until the host confirms completion.
     for (;;) {
       let status: RunStatus
       try { status = await invoke<RunStatus>('get_run_state') }
-      catch (error) {
-        setError(`Cannot confirm run completion. Stop remains available. ${String(error)}`)
-        await pause(250)
-        continue
-      }
-      if (status.active) { await pause(50); continue }
+      catch (error) { setError(`Cannot confirm program completion. Stop remains available. ${String(error)}`); await pause(250); continue }
+      if (status.active) { await pause(100); continue }
       if (status.output) return status.output
-      if (!status.error) {
-        rememberCleanup(['The run result could not be recovered. Process cleanup could not be confirmed.'])
-      }
+      if (!status.error) rememberCleanup(['The run result could not be recovered. Process cleanup could not be confirmed.'])
       throw new Error(status.error ?? String(cause))
     }
   }
-
-  function runProgram() {
-    if (running.current || closePending.current) return
-    const run: ActiveRun = { done: Promise.resolve(), stopTask: null, submitted: false, settled: false, stopRequested: false }
-    activeRun.current = run
-    setRunOutput(null)
-    setRunPhase('running')
-    run.done = perform(async () => {
-      try {
-        // Stop/Close can arrive while editor updates are still being synchronized.
-        if (run.stopRequested) return
-        run.submitted = true
-        let reply: RunReply
-        try { reply = await invoke<RunReply>('run_program', { stdin }) }
-        catch (cause) { reply = { Ok: await recoverRun(cause) } }
-        if ('Err' in reply) throw new Error(reply.Err)
-        displayRun(reply.Ok)
-      } finally {
-        run.settled = true
-        // Drain a late stop request before another run can be started.
-        await run.stopTask
+  async function recoverDebug(id: string, cause: unknown): Promise<DebugOutput> {
+    for (;;) {
+      let status: DebugStatus
+      try { status = await invoke<DebugStatus>('get_debug_state') }
+      catch (error) { setError(`Cannot confirm debugger completion. Stop remains available. ${String(error)}`); await pause(250); continue }
+      if (status.id !== id) {
+        rememberCleanup(['The debugger result could not be recovered. Cleanup could not be confirmed.'])
+        throw new Error(String(cause))
       }
-    }, 'Running…').finally(() => {
-      run.settled = true
-      activeRun.current = null
-      setRunPhase('idle')
+      setDebugView(status)
+      if (!status.active) {
+        if (status.output) return status.output
+        throw new Error(status.error ?? String(cause))
+      }
+      await pause(100)
+    }
+  }
+  async function pollDebug(session: Session) {
+    while (!session.settled) {
+      if (session.submitted) {
+        try {
+          const status = await invoke<DebugStatus>('get_debug_state')
+          if (activeSession.current === session && status.id === session.id) setDebugView(status)
+        } catch (cause) { setError(`Cannot read debugger state: ${String(cause)}`) }
+      }
+      await pause(120)
+    }
+  }
+  function startSession(kind: Session['kind']) {
+    if (operating.current || closePending.current || !unit) return
+    const session: Session = { id: crypto.randomUUID(), kind, done: Promise.resolve(), stopTask: null, submitted: false, settled: false, stopRequested: false }
+    activeSession.current = session; setSessionKind(kind); setStopping(false); setRunOutput(null); setDebugView(null)
+    session.done = perform(async () => {
+      try {
+        await saveAll()
+        if (kind === 'debug') for (const file of unit.files) await loadDocument(file.relative_path)
+        if (session.stopRequested) return
+        session.submitted = true
+        if (kind === 'run') {
+          let reply: Reply<RunOutput>
+          try { reply = await invoke<Reply<RunOutput>>('run_program', { stdin }) }
+          catch (cause) { reply = { Ok: await recoverRun(cause) } }
+          if ('Err' in reply) throw new Error(reply.Err)
+          const output = reply.Ok
+          setRunOutput(output)
+          rememberCleanup(output.cleanup_errors.map(error => output.working_directory ? `${error}\nTemporary directory: ${output.working_directory}` : error))
+        } else {
+          const polling = pollDebug(session)
+          try {
+            let reply: Reply<DebugOutput>
+            try { reply = await invoke<Reply<DebugOutput>>('debug_program', { id: session.id, stdin, breakpoints }) }
+            catch (cause) { reply = { Ok: await recoverDebug(session.id, cause) } }
+            if ('Err' in reply) throw new Error(reply.Err)
+            rememberCleanup(reply.Ok.cleanup_errors)
+            const status = await invoke<DebugStatus>('get_debug_state')
+            if (status.id === session.id) setDebugView(status)
+          } finally { session.settled = true; await polling }
+        }
+      } finally { session.settled = true; await session.stopTask }
+    }, kind === 'run' ? 'Saving, building if needed, and running…' : 'Saving, building if needed, and starting debugger…').finally(() => {
+      session.settled = true; activeSession.current = null; setSessionKind(null); setStopping(false)
     })
   }
-
-  function stopRun(): Promise<void> {
-    const run = activeRun.current
-    if (!run || run.settled) return Promise.resolve()
-    run.stopRequested = true
-    setRunPhase('stopping')
-    setActivity('Stopping and waiting for cleanup…')
-    if (run.stopTask) return run.stopTask
-    run.stopTask = (async () => {
-      // The blocking worker may not have registered yet. Keep the request until
-      // accepted or this run finishes; never carry it into a subsequent run.
-      while (!run.settled && run.submitted) {
-        try { if (await invoke<boolean>('stop_run')) return }
+  function stopSession(): Promise<void> {
+    const session = activeSession.current
+    if (!session || session.settled) return Promise.resolve()
+    session.stopRequested = true; setStopping(true); setActivity('Stopping and waiting for cleanup…')
+    if (session.stopTask) return session.stopTask
+    session.stopTask = (async () => {
+      while (!session.settled && session.submitted) {
+        try { if (await invoke<boolean>(session.kind === 'run' ? 'stop_run' : 'stop_debug', session.kind === 'debug' ? { id: session.id } : {})) return }
         catch (cause) { setError(`Could not request stop: ${String(cause)}`) }
         await pause(25)
       }
     })()
-    return run.stopTask
+    return session.stopTask
   }
-
+  async function debugAction(action: DebugAction) {
+    const session = activeSession.current
+    if (session?.kind !== 'debug' || session.stopRequested || debugBusy) return
+    setDebugBusy(true); setError('')
+    try {
+      await invoke('debug_action', { id: session.id, action })
+      const status = await invoke<DebugStatus>('get_debug_state')
+      if (activeSession.current === session && status.id === session.id) setDebugView(status)
+    } catch (cause) { setError(String(cause)); throw cause }
+    finally { setDebugBusy(false) }
+  }
+  function toggleBreakpoint(file: string, line: number) {
+    if (closing || stopping || debugBusy || (busy && sessionKind !== 'debug')) return
+    const exists = breakpoints.some(point => point.file === file && point.line === line)
+    void (async () => {
+      if (activeSession.current?.kind === 'debug') {
+        if (debugView?.state !== 'Paused') { setError('Pause the program before changing breakpoints.'); return }
+        const point = debugView.breakpoints.find(point => point.file === file && point.line === line)
+        await debugAction(point ? { kind: 'remove_breakpoint', id: point.id } : { kind: 'add_breakpoint', file, line })
+      }
+      setBreakpoints(points => exists ? points.filter(point => point.file !== file || point.line !== line) : [...points, { file, line }])
+    })().catch(() => {})
+  }
   closeAction.current = () => {
     if (closePending.current) return
-    const run = activeRun.current
-    if (running.current && !run) { setError('Please wait for the current operation to finish before closing.'); return }
-    closePending.current = true
-    setClosing(true)
+    const session = activeSession.current
+    if (operating.current && !session) { setError('Please wait for the current operation to finish before closing.'); return }
+    closePending.current = true; setClosing(true)
     void (async () => {
       try {
-        if (run) {
-          void stopRun()
-          await run.done
-        }
-        if (pendingCleanup.current.length > 0) {
-          setQuestion({ kind: 'cleanup', text: 'Close with unresolved cleanup problems?' })
-          const choice = await new Promise<Choice>(resolve => { answer.current = resolve })
-          if (choice !== 'close') return
-        }
+        if (session) { void stopSession(); await session.done }
         let shouldClose = false
         await perform(async () => {
-          shouldClose = await beforeSwitch('Save your changes before closing?') !== null
+          const discardChanges = await beforeSwitch('Save all changes before closing?')
+          if (discardChanges === null) return
+          await invoke('open_unit', { key: null, discardChanges }); clearUnit(null)
+          shouldClose = true
         })
-        if (shouldClose) {
-          allowClose.current = true
-          await getCurrentWindow().close()
-        }
+        if (shouldClose && pendingCleanup.current.length && await ask({ kind: 'cleanup', text: 'Close with unresolved cleanup problems?' }) !== 'confirm') return
+        if (shouldClose) { allowClose.current = true; await getCurrentWindow().close() }
       } catch (cause) { allowClose.current = false; setError(String(cause)) }
       finally { closePending.current = false; setClosing(false) }
     })()
   }
-
-  function edit(value: string) {
-    const current = currentDocument.current
-    if (!current || running.current || closePending.current) return
-    const next = { ...current, value }
-    updateDocument(next)
-    if (isDirty(next)) setCompilation(previous => ({ ...previous, build_valid: false }))
-    if (isDirty(current) !== isDirty(next)) {
-      editorUpdates.current = editorUpdates.current.then(() => invoke<void>('set_editor_dirty', {
-        relativePath: next.relative_path, dirty: isDirty(next),
-      })).catch(cause => { setError(String(cause)) })
-    }
+  function resetExercise() {
+    void perform(async () => {
+      if (await ask({ kind: 'reset', text: 'Restore this exercise from its original course version? Saved and unsaved changes to its supplied files will be replaced. Other exercises and extra files will be kept.' }) !== 'confirm') return
+      const next = await invoke<Unit>('reset_exercise', { discardChanges: true })
+      clearUnit(next)
+      const first = next.targets.primary ?? next.files[0]?.relative_path
+      if (first) { await loadDocument(first); setActiveFile(first) }
+      setMessage('Exercise restored.')
+    })
+  }
+  function editorPanel() {
+    return unit && <Workbench unit={unit} documents={documents} activeFile={activeFile} compilation={compilation} locked={locked} debugEditable={!closing && sessionKind === 'debug' && !!activeSession.current?.submitted} sessionKind={sessionKind} stopping={stopping} debugBusy={debugBusy} breakpoints={breakpoints} runOutput={runOutput} debugView={debugView} stdin={stdin} onStdin={setStdin} onOpen={openFile} onEdit={edit} onBreakpoint={toggleBreakpoint} onTargets={targets => void perform(() => setTargets(targets))} onSave={() => void perform(saveAll)} onReload={() => void perform(async () => {
+      if (docs.current[activeFile] && dirty(docs.current[activeFile])) {
+        const choice = await ask({ kind: 'save', text: 'Save changes before reloading this file?' })
+        if (choice === 'cancel') return
+        if (choice === 'save') await saveAll()
+      }
+      await loadDocument(activeFile, true)
+    })} onBuild={() => void perform(async () => { await saveAll(); setRunOutput(null); setDebugView(null); setCompilation(await invoke<CompileState>('compile_sources')) }, 'Saving and building…')} onRun={() => startSession('run')} onDebug={() => startSession('debug')} onStop={() => void stopSession()} onReset={resetExercise} onDebugAction={action => void debugAction(action).catch(() => {})} />
   }
 
-  function openFile(relativePath: string, reload = false) {
-    if (!reload && currentDocument.current?.relative_path === relativePath) return
-    void perform(async () => {
-      const discardChanges = await beforeSwitch(reload ? 'Save your changes before reloading this file?' : 'Save your changes before opening another file?')
+  return <main>
+    <header><img className="mark" src={codelearnIcon} alt="" /><div><h1>CodeLearn Tool</h1><p>Read, write, and explore C.</p></div></header>
+    <nav className="main-nav" aria-label="Main navigation">{(['Courses', 'Projects', 'Settings'] as const).map(item => <button key={item} aria-current={page === item ? 'page' : undefined} disabled={locked} onClick={() => switchPage(item)}>{item}</button>)}</nav>
+    <div role="status" className="activity">{activity || message}</div>
+    {error && <div role="alert" className="error">{error}</div>}
+    {settings?.error && <div role="alert" className="error">{settings.error} Open Settings to choose an available workspace.</div>}
+    {compilation.tool_errors.length > 0 && <div role="alert" className="error">{compilation.tool_errors.map((error, i) => <p key={i}>{error}</p>)}<p>Review the selected tools in Settings.</p></div>}
+    {cleanupWarnings.length > 0 && <section className="error" role="alert"><h3>Cleanup needs attention</h3>{cleanupWarnings.map((warning, i) => <pre key={i}>{warning}</pre>)}</section>}
+    {page === 'Courses' && <div className="learning-layout"><aside className="library"><h2>Courses</h2><button disabled={locked || !ready} onClick={() => importFolder(true)}>Import course</button><ul>{library.courses.map(item => <li key={item.key}><button disabled={locked} aria-pressed={course?.key === item.key} onClick={() => openCourse(item.key)}>{item.title}<small>Version {item.version}</small></button></li>)}</ul>{!library.courses.length && <p className="hint">Import a complete course folder to start reading.</p>}{course && <><h3>Chapters</h3><ol>{course.data.chapters.map(chapter => <li key={chapter.id}><button disabled={locked} aria-pressed={course.chapter === chapter.id} onClick={() => void perform(async () => { if (await leaveUnit('Save changes before changing chapters?')) await showChapter(course.key, course.data, chapter.id) })}>{chapter.title}</button></li>)}</ol></>}</aside><article className="notebook">{course ? <><h2>{course.data.title}</h2><p className="hint">Version {course.data.version}</p>{course.data.chapters.find(chapter => chapter.id === course.chapter)?.blocks.map(block => <div key={block.id} className="notebook-block">{block.kind === 'content' ? <CourseText location={{ course: course.key, chapter: course.chapter, block: block.id }} text={course.text[block.id] ?? ''} /> : unit?.key.kind === 'course' && unit.key.course === course.key && unit.key.chapter === course.chapter && unit.key.block === block.id ? editorPanel() : <section className="exercise-card"><h3>{block.title}</h3><p>{block.files.join(' · ')}</p><button disabled={locked} onClick={() => void perform(() => activate({ kind: 'course', course: course.key, chapter: course.chapter, block: block.id }))}>Open exercise</button></section>}</div>)}</> : <section className="welcome"><h2>Learn one step at a time</h2><p>Choose a course to read its lessons and try the exercises. Your saved work stays separate from the original course.</p></section>}</article></div>}
+    {page === 'Projects' && <div className="learning-layout"><aside className="library"><h2>Projects</h2><button disabled={locked || !ready} onClick={() => importFolder(false)}>Import project</button><ul>{library.projects.map(project => <li key={project.key}><button disabled={locked} aria-pressed={unit?.key.kind === 'project' && unit.key.project === project.key} onClick={() => void perform(() => activate({ kind: 'project', project: project.key }))}>{project.title}</button></li>)}</ul><p className="hint">Import a complete C project folder. Compile sources are remembered for each project.</p></aside><article>{unit?.key.kind === 'project' ? editorPanel() : <section className="welcome"><h2>Work on a C project</h2><p>Choose a project to edit, build, run, and debug your working copy.</p></section>}</article></div>}
+    {page === 'Settings' && settings && <SettingsPanel settings={settings} compilation={compilation} locked={locked} ready={ready} perform={perform} onCompilation={setCompilation} onApply={async preferences => {
+      const discardChanges = await beforeSwitch('Save changes before changing the workspace?')
       if (discardChanges === null) return
-      const opened = await invoke<Document>('read_authored_file', { relativePath, discardChanges })
-      updateDocument({ ...opened, value: opened.content, generation: (currentDocument.current?.generation ?? 0) + 1 })
-    })
-  }
-
-  async function setTargets(targets: Targets) {
-    setCompilation(await invoke<CompileState>('set_compile_targets', { targets }))
-  }
-
-  function browse(key: keyof Preferences) {
-    void perform(async () => {
-      const path = await open({ directory: true, multiple: false, title: 'Choose directory' })
-      if (path !== null) setDraft(value => ({ ...value, [key]: path }))
-    })
-  }
-
-  function importSource(directory: boolean) {
-    void perform(async () => {
-      const source = await open({ directory, multiple: false, title: directory ? 'Import Folder' : 'Import File' })
-      if (source === null) return
-      await invoke('import_to_workspace', { source })
-      await refresh()
-      setMessage('Imported successfully. The source was preserved.')
-    })
-  }
-
-  function files(area: Area, listing: Listing) {
-    const setListing = area === 'Imported' ? setImported : setAuthored
-    return (
-      <section className="file-panel" aria-label={area}>
-        <div className="panel-title"><h3>{area}</h3><span>{area === 'Imported' ? 'Original copies' : 'Your working files'}</span></div>
-        <div className="directory-bar">
-          <button disabled={busy || !ready || !listing.path} onClick={() => void perform(() => readListing(area, listing.path.split('/').slice(0, -1).join('/')))}>Up</button>
-          <code>{area}/{listing.displayPath}</code>
-        </div>
-        <ul className="entries" aria-label={`${area} entries`}>
-          {listing.entries.map(entry => (
-            <li key={entry.relative_path}>
-              <button className={listing.selected === entry.relative_path ? 'entry selected' : 'entry'}
-                disabled={busy || entry.blocked || !ready}
-                onClick={() => setListing(value => ({ ...value, selected: entry.relative_path }))}
-                aria-pressed={listing.selected === entry.relative_path}>
-                <span aria-hidden="true">{entry.blocked ? '×' : entry.is_directory ? '▸' : '·'}</span>
-                <span>{entry.name}{entry.is_directory ? '/' : ''}{entry.blocked ? ' (unsupported link or file)' : ''}</span>
-              </button>
-              {entry.is_directory ? <button disabled={busy || !ready || entry.blocked} onClick={() => void perform(() => readListing(area, entry.relative_path))} aria-label={`Open ${entry.name}`}>Open</button>
-                : area === 'Authored' && /\.(c|h|txt)$/.test(entry.name) && <button disabled={busy || !ready || entry.blocked} onClick={() => openFile(entry.relative_path)} aria-label={`Edit ${entry.name}`}>Edit</button>}
-            </li>
-          ))}
-          {!listing.entries.length && <li className="empty">{busy ? 'Loading…' : ready ? 'No entries' : 'Workspace is not ready'}</li>}
-        </ul>
-        {area === 'Imported' ? (
-          <div className="actions">
-            <button disabled={busy || !ready} onClick={() => importSource(false)}>Import File</button>
-            <button disabled={busy || !ready} onClick={() => importSource(true)}>Import Folder</button>
-            <button disabled={busy || !ready || !listing.selected} onClick={() => void perform(async () => {
-              await invoke('copy_to_authored', { relativePath: listing.selected })
-              await refresh()
-              setMessage('Copied to Authored, preserving the relative path.')
-            })}>Copy to Authored</button>
-          </div>
-        ) : (
-          <form onSubmit={event => {
-            event.preventDefault()
-            void perform(async () => {
-              await invoke('create_authored_file', { parentRelativePath: listing.path, filename })
-              setFilename('')
-              await refresh()
-              setMessage('Empty file created in Authored.')
-            })
-          }}>
-            <label htmlFor="filename">New File in the current folder (.c, .h, .txt)</label>
-            <div className="actions"><input id="filename" value={filename} disabled={busy || !ready} placeholder="hello.c" onChange={event => setFilename(event.target.value)} /><button disabled={busy || !ready || !filename.trim()} type="submit">New File</button></div>
-          </form>
-        )}
-      </section>
-    )
-  }
-
-  const targets = compilation.targets
-  return (
-    <main aria-busy={busy}>
-      <header><img className="mark" src={codelearnIcon} alt="" /><div><h1>CodeLearn Tool</h1><p>Your learning workspace, starting with C.</p></div></header>
-      <section className="settings">
-        <div className="section-title"><h2>Workspace Settings</h2><span className="status" role="status">{busy ? activity : error || !ready ? 'Needs attention' : 'Ready'}</span></div>
-        <fieldset disabled={busy || settings === null}>
-          {(['workspace_root', 'temp_root'] as const).map(key => {
-            const workspace = key === 'workspace_root'
-            const fallback = (workspace ? settings?.default_workspace_root : settings?.default_temp_root) ?? ''
-            const resolved = workspace ? settings?.resolved_workspace_root : settings?.resolved_temp_root
-            return <div className="path-setting" key={key}>
-              <label htmlFor={key}>{workspace ? 'Learning Workspace' : 'CodeLearnTemp'}</label>
-              <div className="actions"><input id={key} value={draft[key] ?? fallback} onChange={event => setDraft(value => ({ ...value, [key]: event.target.value }))} /><button onClick={() => browse(key)}>Browse</button><button onClick={() => setDraft(value => ({ ...value, [key]: null }))}>Restore Default</button></div>
-              <p className="resolved">Active: <code>{resolved ?? 'Not available'}</code>{draft[key] === null ? ' · Default' : ''}</p>
-            </div>
-          })}
-          <button className="primary" onClick={() => void perform(async () => {
-            const discardChanges = await beforeSwitch('Save your changes before applying workspace settings?')
-            if (discardChanges === null) return
-            const current = await invoke<Settings>('apply_workspace_settings', { preferences: draft, discardChanges })
-            updateDocument(null)
-            setSettings(current)
-            setDraft(current.preferences)
-            setImported(emptyListing())
-            setAuthored(emptyListing())
-            await refresh('', '')
-            setMessage('Settings applied. Existing workspace files and Temp contents were preserved.')
-          })}>Apply</button>
-        </fieldset>
-        <p className="hint">Workspace and Temp must be separate. Changing paths preserves files in the old locations. Restore Default takes effect after Apply.</p>
-      </section>
-      {(error || settings?.error) && <p role="alert" className="error">{error || settings?.error}</p>}
-      {message && <p role="status" className="success">{message}</p>}
-      <div className="section-title"><h2>Workspace Files</h2><button disabled={busy || !ready} onClick={() => void perform(() => refresh())}>Refresh</button></div>
-      <div className="files">{files('Imported', imported)}{files('Authored', authored)}</div>
-      <section className="editor-panel">
-        <div className="section-title"><h2>Editor</h2><span>{document ? dirty ? 'Unsaved changes' : 'Saved' : 'No file open'}</span></div>
-        {document ? <>
-          <div className="editor-toolbar"><code>Authored/{document.display_path}</code><div className="actions">
-            <button disabled={busy || !dirty} onClick={() => void perform(save)}>Save</button>
-            <button disabled={busy} onClick={() => openFile(document.relative_path, true)}>Reload</button>
-          </div></div>
-          <Editor key={document.generation} initialValue={document.content} filename={document.display_path} readOnly={busy} onChange={edit} />
-          {busy && <p role="status" className="hint">{activity} Editing will be available when the operation finishes.</p>}
-        </> : <p className="empty">Choose Edit beside a .c, .h or .txt file in Authored. Copy imported files to Authored first.</p>}
-      </section>
-      <section className="toolchain-panel">
-        <div className="section-title"><h2>Compiler and Debugger</h2><button disabled={busy || !ready} onClick={() => void perform(async () => setCompilation(await invoke<CompileState>('discover_toolchains')), 'Checking installed tools…')}>Scan / Refresh</button></div>
-        <p>GCC: <code>{compilation.gcc?.path ?? 'Not selected'}</code></p>
-        <p>GDB: <code>{compilation.gdb?.path ?? 'Not selected'}</code></p>
-        <p className="hint">Select a validated GCC to compile. GDB is optional for compilation. Selections last until the app closes.</p>
-        <form onSubmit={event => {
-          event.preventDefault()
-          void perform(async () => setCompilation(await invoke<CompileState>('validate_toolchain', { tool, path: toolPath })), 'Checking the selected tool…')
-        }}>
-          <label htmlFor="tool-path">Manual executable path</label>
-          <div className="actions">
-            <select aria-label="Tool" disabled={busy || !ready} value={tool} onChange={event => setTool(event.target.value as Tool)}><option>GCC</option><option>GDB</option></select>
-            <input id="tool-path" disabled={busy || !ready} value={toolPath} onChange={event => setToolPath(event.target.value)} placeholder="Absolute path to gcc or gdb" />
-            <button type="button" disabled={busy || !ready} onClick={() => void perform(async () => {
-              const path = await open({ directory: false, multiple: false, title: `Choose ${tool}` })
-              if (path) setToolPath(path)
-            })}>Browse</button>
-            <button disabled={busy || !ready || !toolPath.trim()}>Validate</button>
-          </div>
-        </form>
-        <ul className="tools">{compilation.candidates.map(candidate => <li key={candidate.id}>
-          <div><strong>{candidate.tool}</strong> · {candidate.usable ? 'Usable' : 'Unavailable'} · {candidate.origin}<br /><code>{candidate.path}</code><p>{candidate.version}</p>
-            {candidate.error && <p className="tool-error">{candidate.error}</p>}
-            {candidate.details && <details><summary>Validation details</summary><pre>{candidate.details}</pre></details>}
-          </div>
-          <button disabled={busy || !candidate.usable} onClick={() => void perform(async () => setCompilation(await invoke<CompileState>('select_toolchain', { id: candidate.id })))}>Select {candidate.tool}</button>
-        </li>)}</ul>
-      </section>
-      <section className="compile-panel">
-        <div className="section-title"><h2>Compile Sources</h2><span className="status">{compilation.build_valid && !dirty ? 'Current compilation available' : 'Compile required'}</span></div>
-        <p className="hint">Select an Authored entry above, then add it here. Opening a file in the editor does not change these sources.</p>
-        <div className="actions">
-          <button disabled={busy || !selectedSource} onClick={() => void perform(() => setTargets({ ...targets, primary: selected!.relative_path, additional: targets.additional.filter(p => p !== selected!.relative_path) }))}>Set Primary .c</button>
-          <button disabled={busy || !selectedSource || targets.primary === selected?.relative_path || targets.additional.includes(selected?.relative_path ?? '')} onClick={() => void perform(() => setTargets({ ...targets, additional: [...targets.additional, selected!.relative_path] }))}>Add Other .c</button>
-          <button disabled={busy || !ready || !selected?.is_directory || targets.includes.includes(selected.relative_path)} onClick={() => void perform(() => setTargets({ ...targets, includes: [...targets.includes, selected!.relative_path] }))}>Add Include Folder</button>
-          <button disabled={busy || !ready || targets.includes.includes(authored.path)} onClick={() => void perform(() => setTargets({ ...targets, includes: [...targets.includes, authored.path] }))}>Include Current Folder</button>
-        </div>
-        <ul className="source-list">
-          <li><span>Primary: <code>{targets.primary ? displayPath(targets.primary) : 'Choose a .c file'}</code></span>{targets.primary && <button disabled={busy} onClick={() => void perform(() => setTargets({ ...targets, primary: null }))}>Remove</button>}</li>
-          {targets.additional.map(path => <li key={`source:${path}`}><span>Other source: <code>{displayPath(path)}</code></span><button disabled={busy} onClick={() => void perform(() => setTargets({ ...targets, additional: targets.additional.filter(p => p !== path) }))}>Remove</button></li>)}
-          {targets.includes.map(path => <li key={`include:${path}`}><span>Include: <code>Authored/{displayPath(path)}</code></span><button disabled={busy} onClick={() => void perform(() => setTargets({ ...targets, includes: targets.includes.filter(p => p !== path) }))}>Remove</button></li>)}
-        </ul>
-        <button className="primary" disabled={busy || !ready || !compilation.gcc || !targets.primary} onClick={() => void perform(async () => {
-          setCompilation(previous => ({ ...previous, build_valid: false, output: null }))
-          if (isDirty(currentDocument.current)) await save()
-          setCompilation(await invoke<CompileState>('compile_sources'))
-        }, 'Compiling…')}>{dirty ? 'Save & Compile' : 'Compile'}</button>
-        <p className="hint">Compilation uses saved files and has a 60-second time limit. Editing and file operations pause while it runs.</p>
-      </section>
-      <section className="output-panel" aria-label="Compile Output">
-        <h2>Compile Output</h2>
-        {compilation.output ? <>
-          <p className={compilation.output.success ? 'success' : 'error'} role="status">{compilation.output.success ? 'Compilation succeeded' : 'Compilation failed'} · Exit code: {compilation.output.exit_code ?? 'Not available'}</p>
-          {compilation.output.error && <p className="tool-error">{compilation.output.error}</p>}
-          <h3>Standard output</h3><pre>{compilation.output.stdout || '(No output)'}</pre>
-          <h3>Warnings and errors</h3><pre>{compilation.output.stderr || '(No warnings or errors)'}</pre>
-          {compilation.output.cleanup_errors.length > 0 && <div role="alert"><h3>Cleanup problems</h3><pre>{compilation.output.cleanup_errors.join('\n')}</pre></div>}
-        </> : <p className="empty">Compile the selected sources to see results.</p>}
-        {compilation.cleanup_errors.length > 0 && <div role="alert"><h3>Temporary files could not be removed</h3><pre>{compilation.cleanup_errors.join('\n')}</pre></div>}
-        <p className="hint">Results describe the last compilation. Changed files require compilation again. External changes are checked when compiling or refreshing; indirect headers are not continuously monitored.</p>
-      </section>
-      <section className="run-panel" aria-label="Run program">
-        <div className="section-title"><h2>Run Program</h2><span className="status" role="status">{runPhase === 'stopping' ? 'Stopping and waiting for cleanup…' : runPhase === 'running' ? 'Starting / running…' : 'Ready'}</span></div>
-        <label htmlFor="run-stdin">Standard input (UTF-8 text, sent before execution)</label>
-        <textarea id="run-stdin" rows={4} disabled={busy} value={stdin} onChange={event => setStdin(event.target.value)} placeholder="Optional input for this run" />
-        <div className="actions">
-          <button className="primary" disabled={busy || !ready || dirty || !compilation.build_valid} onClick={runProgram}>Run</button>
-          <button disabled={runPhase === 'idle'} onClick={() => void stopRun()}>Stop</button>
-        </div>
-        <p className="hint">Compile the current saved sources first. Run does not compile automatically. Input closes after this text is sent; output appears after execution and cleanup. Time limit: 30 seconds. Combined output limit: 25 MiB. Editing and other operations pause until completion.</p>
-      </section>
-      <section className="output-panel" aria-label="Run Output">
-        <h2>Run Output</h2>
-        {runOutput ? <>
-          <p role="status">Outcome: {runOutput.outcome ?? 'Could not start'} · Exit code: {runOutput.exit_code ?? 'Not available'}</p>
-          {runOutput.start_error && <p className="tool-error" role="alert">{runOutput.start_error}</p>}
-          <h3>Standard output</h3><pre>{runOutput.stdout || '(No output)'}</pre>
-          <h3>Standard error</h3><pre>{runOutput.stderr || '(No output)'}</pre>
-          {runOutput.process_errors.length > 0 && <div role="alert"><h3>Process problems</h3><pre>{runOutput.process_errors.join('\n')}</pre></div>}
-          {runOutput.cleanup_errors.length > 0 && <div role="alert"><h3>Cleanup problems</h3><pre>{runOutput.cleanup_errors.join('\n')}</pre></div>}
-          {runOutput.working_directory && <p className="hint">Temporary working directory: <code>{runOutput.working_directory}</code>. It may be removed when the compilation is replaced.</p>}
-        </> : <p className="empty">Run a compiled program to see its results.</p>}
-        {cleanupWarnings.length > 0 && <div className="error" role="alert"><h3>Unresolved cleanup warnings</h3><pre>{cleanupWarnings.join('\n')}</pre><p>Closing requires confirmation. Confirming does not resolve these problems.</p></div>}
-        <p className="hint">A nonzero exit code or standard error output can be a program result. Non-UTF-8 bytes are displayed with replacement characters. Input and results are kept only in this window; imported files are not copied into the run directory.</p>
-      </section>
-      <dialog ref={dialog} onCancel={event => { event.preventDefault(); choose('cancel') }} aria-labelledby="save-question">
-        <h2 id="save-question">{question?.text}</h2>
-        {question?.kind === 'cleanup' ? <>
-          <p>Process or temporary-file cleanup reported problems. Some resources may remain. Closing does not confirm that cleanup succeeded.</p>
-          <pre>{cleanupWarnings.join('\n')}</pre>
-          <div className="actions"><button autoFocus onClick={() => choose('cancel')}>Keep Open</button><button onClick={() => choose('close')}>Close Anyway</button></div>
-        </> : <>
-          <p>Your unsaved changes are still in the editor.</p>
-          <div className="actions"><button autoFocus onClick={() => choose('save')}>Save</button><button onClick={() => choose('discard')}>Discard</button><button onClick={() => choose('cancel')}>Cancel</button></div>
-        </>}
-      </dialog>
-    </main>
-  )
+      const next = await invoke<Settings>('apply_workspace_settings', { preferences, discardChanges })
+      setSettings(next); clearUnit(null); setCourse(null)
+      setLibrary(await invoke<Library>('get_library')); setMessage('Workspace settings saved.')
+    }} />}
+    <dialog ref={dialog} onCancel={event => { event.preventDefault(); choose('cancel') }}><h2>{question?.kind === 'save' ? 'Unsaved changes' : question?.kind === 'reset' ? 'Reset exercise' : 'Cleanup warning'}</h2><p>{question?.text}</p><div className="actions">{question?.kind === 'save' ? <><button onClick={() => choose('cancel')}>Cancel</button><button onClick={() => choose('discard')}>Discard</button><button className="primary" onClick={() => choose('save')}>Save</button></> : <><button onClick={() => choose('cancel')}>{question?.kind === 'cleanup' ? 'Keep open' : 'Cancel'}</button><button onClick={() => choose('confirm')}>{question?.kind === 'cleanup' ? 'Close anyway' : 'Reset exercise'}</button></>}</div></dialog>
+  </main>
 }
 
 createRoot(document.getElementById('root')!).render(<App />)

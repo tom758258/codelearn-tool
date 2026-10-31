@@ -6,13 +6,13 @@ A Windows and Linux desktop application for learning programming, starting with 
 
 ## Current scope / 目前範圍
 
-The Tauri 2 desktop now provides Workspace Settings, Imported/Authored file browsing, file and folder import, Copy to Authored, and New File (`.c`, `.h`, `.txt`). The editor opens and saves UTF-8 `.c`, `.h`, and `.txt` files in Authored using Monaco. Select a validated GCC and explicit sources to compile C11 programs and read compiler output, then run the current compilation with optional standard input and Stop control. The independent Rust Core also provides supervised program execution and GDB/MI3 debugging APIs.
+The Tauri 2 desktop provides **Courses**, **Projects**, and **Settings**. Read ordered Markdown lessons and local images, edit independent exercise copies in multiple Monaco tabs, and build, run, or debug C programs. Import complete course folders or ordinary C project folders. GCC/GDB selections persist and are validated again at startup.
 
-Tauri 2 桌面程式現已提供 Workspace Settings、Imported／Authored 檔案瀏覽、單檔與整個資料夾匯入、Copy to Authored，以及 New File（`.c`、`.h`、`.txt`）。編輯器使用 Monaco 開啟及儲存 Authored 內的 UTF-8 `.c`、`.h`、`.txt` 檔案。選定經驗證的 GCC 與明確的來源檔，即可編譯 C11 程式並檢視編譯輸出，再執行目前編譯結果，提供選用的標準輸入及 Stop 操作。獨立 Rust Core 也提供受控程序執行及 GDB/MI3 除錯 API。
+Tauri 2 桌面程式提供 **Courses**、**Projects** 與 **Settings**。可依序閱讀 Markdown 教材與本機圖片，在多個 Monaco 分頁編輯獨立的練習副本，並建置、執行或除錯 C 程式。支援完整課程資料夾及一般 C 專案資料夾匯入；GCC/GDB 選擇會保存，並於啟動時重新驗證。
 
-Toolchain installation, desktop debug controls, lessons, and learning progress are **not implemented**. Workspace files and local path preferences persist on this machine. No telemetry, cloud services, or learning-record storage is included.
+Toolchain installation, course authoring, and learning progress are **not implemented**. Files and settings stay on this machine. No telemetry, cloud services, or learning-record storage is included. See the bilingual [course format guide](docs/course-format.md) and [sample course](examples/first-steps).
 
-工具鏈安裝、桌面除錯操作、課程及學習進度均**尚未實作**。Workspace 檔案與本機路徑偏好會保存在這台電腦；不包含遙測、雲端服務或學習紀錄儲存。
+工具鏈安裝、課程編製及學習進度均**尚未實作**。檔案與設定保留在本機，不包含遙測、雲端服務或學習紀錄儲存。請參閱雙語的[課程格式說明](docs/course-format.md)與[範例課程](examples/first-steps)。
 
 Core callers explicitly select an absolute GCC executable path and provide existing, separate Workspace and CodeLearnTemp directories. Selected `.c` files, logical source directories, and include directories must resolve inside the Workspace. Text input is compiled from a private snapshot and may link additional selected `.c` files. GCC is validated by a real compile/link; GDB is checked independently for version/startup only. Discovery suggests usable candidates in explicit-path, PATH, then common-location order and never selects one automatically.
 
@@ -58,61 +58,63 @@ Debug cleanup uses the existing Windows Job Object; Linux uses an exclusive sess
 
 除錯清理沿用 Windows Job Object；Linux 因 GDB 會另建 Inferior 程序群組，改用獨立 Session 與 pidfd，需支援 `/proc` 與 pidfd（Ubuntu 24.04 目標具備）。孤兒程序退出後由宿主 Init／Reaper 回收；Core 不改動應用程式的全域 Subreaper 設定。有限清理後若仍有殘留，包含等待宿主回收的 Zombie，會回報清理錯誤並保留 Artifact。此機制是程序管理，不是沙箱。
 
-## Desktop workspace / 桌面工作區
+## Courses and projects / 課程與專案
 
-Learning Workspace defaults to `LearningWorkspace` under Tauri's `appDataDir`; CodeLearnTemp defaults to `CodeLearnTemp` under `appCacheDir`. Browse or enter absolute directories, then Apply. The active resolved paths are shown below the inputs. Restore Default stages the default for that path; Apply saves it. JSON preferences live in `workspace-settings.json` under `appConfigDir`, separate from both data roots. Invalid saved settings display an error and can be corrected here; the app does not silently fall back to defaults. Changing roots leaves old files in place and never clears Temp.
+In **Courses**, choose **Import course** and select a complete folder containing `course.json`. Choose a course and chapter to read its text and images in order; **Open exercise** creates a working copy only when needed. Reading does not require GCC/GDB. Markdown HTML and remote images are not executed or loaded. Code snippets in lesson text are read-only.
 
-Learning Workspace 預設位於 Tauri `appDataDir` 下的 `LearningWorkspace`；CodeLearnTemp 預設位於 `appCacheDir` 下的 `CodeLearnTemp`。可用 Browse 或輸入絕對目錄，再按 Apply；輸入欄下方顯示目前生效的解析路徑。Restore Default 會先將該路徑改回預設選項，按 Apply 才保存。JSON 偏好儲存於 `appConfigDir` 下的 `workspace-settings.json`，與兩個資料根目錄分開。已保存的設定無效時會顯示錯誤，可在此修正，不會默默改用預設。切換目錄保留舊位置的檔案，也不清空 Temp。
+在 **Courses** 選擇 **Import course**，匯入包含 `course.json` 的完整資料夾。選擇課程與章節，即可依序閱讀文字與圖片；按 **Open exercise** 才會在需要時建立練習副本。閱讀不需要 GCC/GDB；Markdown 中的 HTML 與遠端圖片不會執行或載入，教材內的程式片段僅供閱讀。
 
-Import File/Folder copies all regular files to Imported, preserving the folder structure and the external source. Select an entry and use Copy to Authored to create an independent working copy, retaining its path relative to Imported. Use Open/Up to browse folders; New File creates an empty `.c`, `.h`, or `.txt` in the currently displayed Authored folder. Existing destinations are rejected without overwrite or folder merging. Imports and copies reject symlinks, Windows junctions, and special files; links in existing areas cannot be opened. Workspace and Temp cannot overlap, including through physical path aliases. Operations are serialized and errors are displayed in the window.
+The same course ID and version cannot be imported twice. Different versions and exercises keep separate student files. **Reset exercise** asks before restoring only that exercise's supplied files from the same original version. It keeps extra files and other exercises. Reset is unavailable until an active program or debugger finishes cleanup. See the format guide for file and path requirements and partial-failure behavior.
 
-Import File／Folder 將所有一般檔案複製至 Imported，保留目錄結構與外部原始檔。選取項目後按 Copy to Authored，即可建立獨立的工作副本，保留相對於 Imported 的路徑。使用 Open／Up 瀏覽資料夾；New File 會在目前顯示的 Authored 資料夾建立空白 `.c`、`.h` 或 `.txt`。既有目的項目會被拒絕，不覆寫或合併資料夾。匯入與複製拒絕 Symlink、Windows Junction 及特殊檔案，既有區域中的連結無法開啟。Workspace 與 Temp 不可重疊，包括實體路徑別名。操作依序處理，錯誤顯示於視窗。
+相同課程 ID 與版本不可重複匯入；不同版本及練習各自保存學生檔案。**Reset exercise** 會先確認，再從同版本原始教材恢復該練習提供的檔案，保留額外檔案與其他練習。活動程式或除錯程序尚未完成清理時不能重設。檔案、路徑要求及部分失敗的處理方式請見格式說明。
 
-On Linux, imported names containing colons, backslashes, or non-UTF-8 bytes remain browsable and can be copied to Authored. Bytes that cannot be displayed as text appear as `�`; file operations preserve the original names, including names that look identical in the list.
+In **Projects**, choose **Import project** to copy an ordinary C project folder. No CodeLearn configuration file is required in the source. Under **Compile sources**, select the main `.c`, additional `.c` files, and include folders. A project with one C file selects it automatically. Choices are saved in workspace management data, outside the copied source folder. Makefile/CMake and multiple build targets are not supported.
 
-在 Linux，匯入檔名含冒號、反斜線或非 UTF-8 位元組時，仍可瀏覽及複製至 Authored。無法以文字顯示的位元組會顯示為 `�`；檔案操作保留原始檔名，即使列表中的名稱看起來相同也不會混淆。
+在 **Projects** 選擇 **Import project**，複製一般 C 專案資料夾；來源不需要 CodeLearn 設定檔。在 **Compile sources** 選定主要 `.c`、其他 `.c` 與 Include 資料夾；只有一個 C 檔案的專案會自動選定。選擇保存於工作區管理資料，不寫入專案來源副本。不支援 Makefile/CMake 或多組建置目標。
 
-Failed copies attempt to remove only entries created by that operation whose filesystem identities still match. Unexpected entries or cleanup errors are retained and reported. File copies are not transactions; a crash can leave partial data. Path checks do not protect against another process actively replacing entries during an operation.
+Imports preserve the external source and reject symlinks, Windows junctions, and special files. Workspace and temporary folders cannot overlap, including physical aliases. Failed copies attempt cleanup only for entries created by that operation whose filesystem identities still match. Unexpected entries and cleanup errors are retained and reported. Copies are not transactions; crashes may leave partial data. Checks cannot prevent another process actively replacing entries during an operation.
 
-複製失敗時，僅嘗試移除該次建立、檔案系統身分仍相符的項目；意外新增的內容或無法清理的項目會保留並回報。檔案複製不是交易，崩潰可能留下部分資料；路徑檢查無法防範其他程序在操作期間持續替換檔案項目。
+匯入保留外部來源，拒絕符號連結、Windows Junction 及特殊檔案。工作區與暫存目錄不可重疊，包括實體路徑別名。複製失敗時，僅清理該次建立且檔案系統身分仍相符的項目；意外新增內容與清理錯誤會保留並回報。複製不是交易，崩潰可能留下部分資料；檢查無法防止其他程序在操作期間持續替換項目。
 
-## Editing and compiling / 編輯與編譯
+## Settings / 設定
 
-Choose **Edit** beside an Authored `.c`, `.h`, or `.txt` file. The editor shows unsaved changes and provides Save and Reload. Opening another file, applying workspace settings, or closing with unsaved changes offers Save, Discard, and Cancel. Save compares the on-disk content with the last opened or saved content; a conflict or write failure keeps your edits open. To abandon edits after an external change, choose Reload and then Discard. Non-UTF-8 content is rejected without conversion; native Linux filenames remain supported. Saves use a temporary file in the same folder before replacing the destination. These checks do not prevent every race with external writers.
+**Settings** contains workspace, temporary folder, GCC, and GDB choices. Enter or browse absolute folders and choose **Apply folders**. **Use default** stages a default until applied. Defaults are `LearningWorkspace` under Tauri's `appDataDir` and `CodeLearnTemp` under `appCacheDir`. Preferences live in `workspace-settings.json` under `appConfigDir`, separate from both data roots. Invalid saved settings display errors without silently falling back. Changing folders keeps old data and never clears temporary files.
 
-在 Authored 的 `.c`、`.h` 或 `.txt` 檔案旁選擇 **Edit**。編輯器顯示未儲存狀態，並提供 Save 與 Reload。開啟其他檔案、套用工作區設定或關閉視窗時，若有未儲存內容，會提供 Save、Discard、Cancel。儲存前會將磁碟內容與上次開啟或儲存的內容比對；衝突或寫入失敗時保留編輯內容。外部修改後若要放棄自己的編輯，選 Reload，再選 Discard。不符合 UTF-8 的內容會被拒絕，不進行轉碼；仍支援 Linux 原始檔名。儲存時先寫入同資料夾的暫存檔，再替換目的檔案；這些檢查無法防止所有外部同時寫入的競合。
+**Settings** 集中設定工作區、暫存目錄、GCC 與 GDB。輸入或瀏覽絕對目錄後按 **Apply folders**；**Use default** 需套用才生效。預設分別是 Tauri `appDataDir` 下的 `LearningWorkspace` 與 `appCacheDir` 下的 `CodeLearnTemp`。偏好保存在 `appConfigDir` 的 `workspace-settings.json`，與資料目錄分離。無效設定會顯示錯誤，不會默默改用預設；切換目錄保留舊資料，也不清空暫存檔。
 
-Use **Scan / Refresh**, or enter an absolute executable path and choose **Validate**, then explicitly **Select GCC** or **Select GDB**. Validation shows the version, availability, origin, and failure details. GCC must pass a real compile/link check. GDB is checked independently for version/startup; it is optional for compilation and this check does not establish debugging compatibility. Selections are kept only while the app is open. No tools are automatically selected or installed.
+Use **Find installed tools**, or enter an absolute executable path and choose **Check tool**, then explicitly **Use GCC** or **Use GDB**. GCC must pass a real compile/link check. GDB validation checks version/startup; debugging checks MI3 compatibility at launch. Saved paths are revalidated when the app starts. An invalid GDB does not prevent a valid GCC from building or running. Changing workspace keeps tool selections. Tools are never installed, replaced, or selected automatically, and the system PATH is not changed.
 
-使用 **Scan / Refresh**，或輸入執行檔絕對路徑後選 **Validate**，再明確按下 **Select GCC** 或 **Select GDB**。驗證結果顯示版本、可用性、來源及失敗細節。GCC 必須通過真實編譯／連結檢查；GDB 另行檢查版本與啟動能力，編譯時不必選擇 GDB，這項檢查也不代表除錯相容性已驗證。工具選擇只保留至應用程式關閉，不自動選擇或安裝。
+使用 **Find installed tools**，或輸入執行檔絕對路徑後按 **Check tool**，再明確選擇 **Use GCC** 或 **Use GDB**。GCC 須通過真實編譯／連結檢查；GDB 先驗證版本及啟動能力，啟動除錯時再檢查 MI3 相容性。保存的路徑會在啟動時重新驗證；GDB 無效不影響有效 GCC 的建置與執行。切換工作區保留工具選擇，不自動安裝、更換或選定工具，也不修改系統 PATH。
 
-Select an Authored entry in the file list, then use **Set Primary .c**, **Add Other .c**, or **Add Include Folder**. **Include Current Folder** adds the currently displayed Authored folder. Sources are separate from the open editor file, so you can edit a header while compiling selected C sources. Imported files must first be copied to Authored. Compilation uses only the explicitly selected sources and include directories, all within Authored. **Save & Compile** saves current edits first and stops if saving fails. The interface remains responsive during compilation, while editing, file operations, settings, and tool selection are temporarily unavailable.
+## Editing, building, and running / 編輯、建置與執行
 
-先在檔案列表選取 Authored 項目，再用 **Set Primary .c**、**Add Other .c** 或 **Add Include Folder** 加入編譯來源；**Include Current Folder** 加入目前顯示的 Authored 資料夾。編譯來源與編輯中的檔案分開，因此可編輯 Header，同時編譯指定的 C 來源。Imported 檔案須先複製至 Authored。編譯只使用明確選取、且位於 Authored 內的來源及 Include 目錄。**Save & Compile** 會先儲存目前編輯內容，儲存失敗即停止。編譯期間介面仍可回應，但暫時禁止編輯、檔案操作、設定及工具選擇。
+Each file tab keeps its own unsaved changes. Selecting a header does not change compile sources. **Save** saves all changed tabs. Leaving an exercise/project, changing workspace, or closing offers **Save / Discard / Cancel**. Save compares disk content with the last opened or saved content; conflicts and write failures retain your buffer. **Reload file** can discard it after confirmation. Files must be UTF-8; saves replace the destination through a temporary file in the same folder. These checks do not prevent every race with external writers.
 
-Compile Output shows success/failure, exit code, standard output, warnings/errors, and cleanup problems. Warnings can accompany success. Editing or saving, changing sources/includes/GCC/workspace, or starting another compilation invalidates the previous result. A failed compilation never restores an older successful result. Known source contents are checked before and after compilation and when refreshing the displayed state. There is no file watcher or complete indirect-header dependency tracking; files changed outside the app may remain undetected until a check. The app retains the compiled result locally only while it remains current. Execution requires an explicit Run action.
+每個檔案分頁各自保留未儲存內容；選擇 Header 不會改變編譯來源。**Save** 儲存所有修改過的分頁。離開練習／專案、切換工作區或關閉時，提供 **Save / Discard / Cancel**。儲存前比較磁碟與上次開啟或保存的內容；衝突及寫入失敗時保留編輯內容。**Reload file** 可在確認後放棄編輯。檔案須為 UTF-8，儲存透過同資料夾的暫存檔替換目的檔；無法防止所有外部寫入競合。
 
-Compile Output 顯示成功／失敗、結束代碼、標準輸出、警告／錯誤及清理問題；有警告仍可編譯成功。編輯或儲存、變更來源／Include／GCC／工作區，或開始下一次編譯，都會使舊結果失效。編譯失敗不會恢復使用先前的成功結果。編譯前後與更新顯示狀態時，會檢查已掌握來源的內容；沒有檔案監看或完整間接 Header 相依追蹤，外部變更可能直到檢查時才被發現。應用程式僅在結果仍有效時於本機保留編譯產物，須明確按下 Run 才會執行。
+**Build**, **Run**, and **Debug** first save all changed files in the current exercise/project. Run and Debug build automatically when the current compilation is missing or no longer valid. Saving or compilation failures stop the action; an older successful program is never substituted. There is only one current compilation. Switching units or changing source files, compile settings, GCC, or workspace invalidates it. Known source contents and the selected GCC file are checked before reuse; there is no file watcher or complete indirect-header tracking.
 
-## Running a program / 執行程式
+**Build**、**Run**、**Debug** 先儲存目前練習／專案所有修改過的檔案。Run 與 Debug 在沒有有效編譯結果時自動建置；儲存或編譯失敗即停止，不會改執行舊的成功結果。同時只保留一份目前有效的編譯結果；切換操作單元、修改來源、編譯選擇、GCC 或工作區時使其失效。重用前會核對已掌握來源內容與選定的 GCC 檔案；不提供檔案監看或完整間接 Header 追蹤。
 
-After a successful compilation, enter any UTF-8 text in **Standard input** and choose **Run**. Run checks the saved sources and current compilation again; unsaved edits, changed known sources, or a missing executable require compilation first. Run never compiles automatically. Only one program runs at a time. The editor is read-only and file, settings, toolchain, and compilation operations remain unavailable until execution and cleanup finish. **Stop** remains available, including during startup; requesting stop does not mean cleanup has finished.
+**Standard input** supplies text once at startup, then closes. **Program output** shows final stdout/stderr, outcome, exit code, and errors. Run does not stream output or accept interactive input. Only one program or debugger is active; during Run the editor is read-only. **Stop** remains available during startup and execution. Other operations remain locked until waiting and cleanup finish. Running time is limited to **30 seconds**, with **25 MiB combined** stdout/stderr. Inputs and results stay in memory without history or uploads. Temporary working directories may disappear when their compilation is discarded; runtime input-file selection is not provided.
 
-成功編譯後，可在 **Standard input** 預先輸入 UTF-8 文字，再按 **Run**。執行前會重新核對已儲存來源與目前編譯結果；有未儲存修改、已掌握來源變更或執行檔遺失時，必須先編譯，不會自動編譯。同時僅執行一個程式；直到執行與清理完成前，編輯器暫時唯讀，檔案、設定、工具選擇及編譯操作暫停。**Stop** 在啟動期間亦可使用；提出停止要求不代表清理已完成。
+**Standard input** 於啟動時一次送出文字後關閉。**Program output** 顯示最終 stdout/stderr、結果、結束代碼及錯誤。Run 不即時串流輸出，也不接受互動輸入。同時僅允許一個執行或除錯程序；Run 期間編輯器唯讀。啟動及執行期間仍可按 **Stop**，其他操作須等候程序與清理完成才恢復。執行限制為 **30 秒**，stdout/stderr **合計 25 MiB**。輸入與結果僅留於記憶體，不建立歷史或上傳；編譯結果釋放後，暫存執行目錄可能消失，不提供執行輸入檔選擇。
 
-Input closes after the supplied text is sent; there is no interactive input. **Run Output** displays the final outcome, exit code, stdout, stderr, start/process errors, cleanup errors, and temporary working directory separately from Compile Output. Nonzero exit codes and text on stderr can be ordinary program results. Non-UTF-8 output bytes use replacement characters. The time limit is **30 seconds**, and stdout/stderr have a **25 MiB combined** limit. The working directory may disappear when its compilation is invalidated. Imported files are not automatically copied there; runtime input-file selection is not provided. Input and the latest result remain in memory only, without run history or uploads.
+## Debugging and closing / 除錯與關閉
 
-預先文字送出後即關閉輸入，不提供執行中互動輸入。**Run Output** 與 Compile Output 分開，完成後顯示執行結果、結束代碼、stdout、stderr、啟動／程序錯誤、清理錯誤及暫存工作目錄。非零結束代碼或 stderr 文字可能是一般程式結果；非 UTF-8 輸出以替代字元顯示。時間限制為 **30 秒**，stdout/stderr **合計上限 25 MiB**。編譯結果失效時，暫存工作目錄可能被移除。Imported 檔案不會自動複製至此，也不提供執行輸入檔選擇。輸入與最近結果僅保留於記憶體，不建立執行歷史或上傳資料。
+Choose **Debug** to stop at `main`. Click beside a line number to add/remove a breakpoint. Use **Continue**, **Step into**, **Step over**, **Step out**, or **Pause**. Variables and the call stack are available while paused; selecting a stack frame shows its variables and source when available. Program output and debugger messages are displayed separately. Editing during debugging requests Stop, preserves your input, and waits for cleanup before other operations resume.
 
-Closing the window during a run requests Stop and waits for the final result. Cleanup problems keep the window open for **Keep Open / Close Anyway** confirmation, followed by the usual Save / Discard / Cancel protection for unsaved edits. A later successful run does not erase unresolved cleanup warnings. Closing anyway acknowledges the warning; it does not repair cleanup or prove that all processes exited. These controls cover normal window closing, not forced OS termination, and do not provide a sandbox.
+選擇 **Debug** 會停在 `main`。點擊行號旁可新增／移除斷點，並使用 **Continue**、**Step into**、**Step over**、**Step out** 或 **Pause**。暫停時可查看變數及呼叫堆疊，選擇堆疊項目可查看該層變數與可用來源。程式輸出與除錯訊息分開顯示。除錯期間編輯會要求停止、保留輸入，並等候清理完成才恢復其他操作。
 
-執行中關閉視窗會先要求 Stop，並等待最終結果。若有清理問題，視窗會保留並提供 **Keep Open / Close Anyway** 確認，之後才進入既有的 Save／Discard／Cancel 未儲存保護。後續成功執行不會抹除尚未解決的清理警告。選擇仍要關閉只是確認警告，不會修復清理問題，也不代表所有程序皆已結束。此流程適用一般視窗關閉，不涵蓋作業系統強制終止，亦不提供沙箱隔離。
+Closing during execution or debugging requests Stop and waits for completion. Unresolved cleanup problems require **Keep open / Close anyway** confirmation, followed by unsaved-change protection. Closing anyway acknowledges the warning; it does not repair cleanup or prove that every process exited. These controls cover ordinary window closing, not forced OS termination. Student programs have ordinary OS access: process supervision is **not a sandbox**.
+
+執行或除錯期間關閉視窗，會先要求停止並等待完成。尚未解決的清理問題須經 **Keep open / Close anyway** 確認，之後才處理未儲存內容。仍要關閉僅代表確認警告，不會修復清理或證明所有程序已退出。此保護適用一般關閉，不涵蓋作業系統強制終止。學生程式具有一般作業系統存取權，程序管理**不是沙箱**。
 
 ## Main dependencies / 主要依賴
 
 | Component / 元件 | Dependencies and purpose / 依賴與用途 |
 | --- | --- |
-| Desktop UI / 桌面介面 | React, TypeScript, Vite; Monaco Editor for local text editing; `@tauri-apps/api` for commands and window events / 本機文字編輯、呼叫 Commands 與視窗事件 |
+| Desktop UI / 桌面介面 | React, TypeScript, Vite; Monaco Editor for local text editing; `react-markdown` for lesson text / 教材文字; `@tauri-apps/api` for commands and window events / 本機文字編輯、呼叫 Commands 與視窗事件 |
 | Desktop host / 桌面宿主 | Tauri 2; `tauri-plugin-dialog` and `@tauri-apps/plugin-dialog` for native selection / 原生選擇視窗 |
 | Workspace / 工作區 | `serde`, `serde_json` for local preferences; `tempfile` for settings/file replacement and write probes; `same-file` for cleanup ownership / 本機偏好、設定／檔案替換與寫入檢查、清理歸屬檢查 |
 | Filename transport / 檔名傳遞 | `percent-encoding` preserves native filename bytes between the UI and Rust / 保留 UI 與 Rust 之間傳遞的原始檔名位元組 |
@@ -199,6 +201,10 @@ Build the frontend before direct Cargo checks of Tauri. No frontend test suite i
 Desktop tests also cover UTF-8 read/save, external-change conflicts, unsaved edits, source boundaries, and rejection of conflicting operations. A separate opt-in Desktop compilation test uses an existing GCC to check single/multiple sources, warnings, failed builds, and result invalidation without running compiled programs. From `apps/desktop`, set `CODELEARN_TEST_GCC` to an absolute GCC path and run `cargo test --locked --manifest-path src-tauri/Cargo.toml desktop_compile_tracks -- --ignored --nocapture`; optionally provide `CODELEARN_TEST_GDB` to check GDB selection too. Native editor interactions still require GUI validation on Windows and Linux.
 
 Desktop 測試也涵蓋 UTF-8 讀寫、外部修改衝突、未儲存編輯、來源邊界，以及衝突操作的拒絕。另有需明確啟用的 Desktop 編譯測試，使用既有 GCC 驗證單檔／多檔、警告、失敗編譯及結果失效，不執行編譯產出的程式。在 `apps/desktop` 設定 `CODELEARN_TEST_GCC` 為 GCC 絕對路徑，再執行 `cargo test --locked --manifest-path src-tauri/Cargo.toml desktop_compile_tracks -- --ignored --nocapture`；亦可提供 `CODELEARN_TEST_GDB` 檢查 GDB 選擇。原生編輯器互動仍須於 Windows 與 Linux 進行 GUI 驗證。
+
+Course/project tests cover manifest validation, version separation, exercise copies/reset, local image boundaries, and saved project sources. To check the Desktop execution/debug connection with synthetic programs, set both `CODELEARN_TEST_GCC` and `CODELEARN_TEST_GDB` to existing absolute executable paths and run `cargo test --locked --manifest-path src-tauri/Cargo.toml desktop_ -- --ignored --nocapture` from `apps/desktop`. These tests execute local synthetic programs. GUI validation still requires a representative course and project flow on each platform; build success does not confirm GUI compatibility.
+
+課程／專案測試涵蓋格式驗證、版本隔離、練習副本／重設、本機圖片邊界及編譯來源保存。若要以合成程式驗證 Desktop 執行／除錯接線，設定 `CODELEARN_TEST_GCC` 與 `CODELEARN_TEST_GDB` 為既有執行檔絕對路徑，再於 `apps/desktop` 執行 `cargo test --locked --manifest-path src-tauri/Cargo.toml desktop_ -- --ignored --nocapture`。這些測試會執行本機合成程式。兩個平台仍須各完成代表性的課程與專案 GUI 流程，建置成功不代表介面相容性已驗證。
 
 Real GCC checks are opt-in: set `CODELEARN_TEST_GCC` to an existing absolute GCC path, then run `cargo test --workspace --locked --test build -- --ignored --nocapture`. Optionally set `CODELEARN_TEST_GDB` to check a real GDB, and `CODELEARN_TEST_REQUIRE_PATH=1` to require the selected GCC to also be discovered through the current PATH. These checks compile synthetic sources without executing the resulting programs. Tools are never installed automatically.
 

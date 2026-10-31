@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CodeLearn course",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "version", "title", "chapters"],
+  "properties": {
+    "id": { "$ref": "#/$defs/id" },
+    "version": { "type": "string", "minLength": 1 },
+    "title": { "type": "string", "minLength": 1 },
+    "chapters": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "title", "blocks"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "title": { "type": "string", "minLength": 1 },
+          "blocks": {
+            "type": "array", "minItems": 1,
+            "items": { "oneOf": [{ "$ref": "#/$defs/content" }, { "$ref": "#/$defs/program" }] }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z0-9_-]{1,48}$" },
+    "path": { "type": "string", "minLength": 1, "description": "Portable relative path using /. The application validates containment and referenced files." },
+    "content": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "id", "markdown"],
+      "properties": {
+        "kind": { "const": "content" },
+        "id": { "$ref": "#/$defs/id" },
+        "markdown": { "$ref": "#/$defs/path", "pattern": "\\.md$" }
+      }
+    },
+    "program": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "id", "title", "directory", "files", "targets"],
+      "properties": {
+        "kind": { "const": "program" },
+        "id": { "$ref": "#/$defs/id" },
+        "title": { "type": "string", "minLength": 1 },
+        "directory": { "$ref": "#/$defs/path" },
+        "files": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/path", "pattern": "\\.[ch]$" } },
+        "targets": {
+          "type": "object", "additionalProperties": false,
+          "required": ["primary", "additional", "includes"],
+          "properties": {
+            "primary": { "$ref": "#/$defs/path", "pattern": "\\.c$" },
+            "additional": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/path", "pattern": "\\.c$" } },
+            "includes": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/path" } }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": "first-steps",
+  "version": "1.0",
+  "title": "First steps in C",
+  "chapters": [
+    {
+      "id": "basics",
+      "title": "Values and functions",
+      "blocks": [
+        { "kind": "content", "id": "welcome", "markdown": "chapters/basics/welcome.md" },
+        {
+          "kind": "program", "id": "hello", "title": "Print a value",
+          "directory": "chapters/basics/exercises/hello",
+          "files": ["main.c"],
+          "targets": { "primary": "main.c", "additional": [], "includes": [] }
+        },
+        { "kind": "content", "id": "functions", "markdown": "chapters/basics/functions.md" },
+        {
+          "kind": "program", "id": "sum", "title": "Follow a function call",
+          "directory": "chapters/basics/exercises/sum",
+          "files": ["main.c", "sum.c", "sum.h"],
+          "targets": { "primary": "main.c", "additional": ["sum.c"], "includes": ["."] }
+        }
+      ]
+    }
+  ]
+}
