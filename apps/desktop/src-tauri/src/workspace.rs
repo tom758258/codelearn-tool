@@ -9,6 +9,9 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+mod learning;
+pub use learning::{Course, Library, Unit, UnitKey};
+
 pub type Result<T> = std::result::Result<T, String>;
 
 #[derive(Clone, Default, Deserialize, Serialize)]
@@ -16,6 +19,16 @@ pub type Result<T> = std::result::Result<T, String>;
 pub struct Preferences {
     pub workspace_root: Option<PathBuf>,
     pub temp_root: Option<PathBuf>,
+}
+
+#[derive(Default, Deserialize, Serialize)]
+struct SavedSettings {
+    #[serde(flatten)]
+    preferences: Preferences,
+    #[serde(default)]
+    gcc: Option<PathBuf>,
+    #[serde(default)]
+    gdb: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -38,6 +51,7 @@ pub struct Settings {
 pub enum Area {
     Imported,
     Authored,
+    Library,
 }
 
 impl Area {
@@ -45,6 +59,7 @@ impl Area {
         match self {
             Self::Imported => "Imported",
             Self::Authored => "Authored",
+            Self::Library => "Library",
         }
     }
 }
@@ -69,6 +84,8 @@ pub struct Workspace {
     default_temp: PathBuf,
     preferences: Preferences,
     active: Result<Roots>,
+    pub gcc: Option<PathBuf>,
+    pub gdb: Option<PathBuf>,
 }
 
 impl Workspace {
@@ -77,7 +94,7 @@ impl Workspace {
             Ok(bytes) => {
                 serde_json::from_slice(&bytes).map_err(|e| format!("Invalid settings: {e}"))
             }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Preferences::default()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(SavedSettings::default()),
             Err(e) => Err(format!("Cannot read settings: {e}")),
         };
         let mut workspace = Self {
@@ -86,9 +103,13 @@ impl Workspace {
             default_temp,
             preferences: Preferences::default(),
             active: Err("Workspace is not ready".into()),
+            gcc: None,
+            gdb: None,
         };
-        workspace.active = loaded.and_then(|preferences| {
-            workspace.preferences = preferences;
+        workspace.active = loaded.and_then(|saved: SavedSettings| {
+            workspace.preferences = saved.preferences;
+            workspace.gcc = saved.gcc;
+            workspace.gdb = saved.gdb;
             workspace.prepare(&workspace.preferences)
         });
         workspace
@@ -134,7 +155,7 @@ impl Workspace {
         let workspace = canonical(&workspace)?;
         let temp = canonical(&temp)?;
         separate(&workspace, &temp)?;
-        for area in [Area::Imported, Area::Authored] {
+        for area in [Area::Imported, Area::Authored, Area::Library] {
             let path = workspace.join(area.name());
             match fs::create_dir(&path) {
                 Ok(()) => (),
@@ -149,12 +170,43 @@ impl Workspace {
 
     pub fn apply(&mut self, preferences: Preferences) -> Result<Settings> {
         let roots = self.prepare(&preferences)?;
+        self.persist_settings(&preferences, &self.gcc, &self.gdb)?;
+        self.preferences = preferences;
+        self.active = Ok(roots);
+        Ok(self.settings())
+    }
+
+    pub fn save_tool(&mut self, gcc: bool, path: PathBuf) -> Result<()> {
+        let (next_gcc, next_gdb) = if gcc {
+            (Some(path), self.gdb.clone())
+        } else {
+            (self.gcc.clone(), Some(path))
+        };
+        self.persist_settings(&self.preferences, &next_gcc, &next_gdb)?;
+        self.gcc = next_gcc;
+        self.gdb = next_gdb;
+        Ok(())
+    }
+
+    fn persist_settings(
+        &self,
+        preferences: &Preferences,
+        gcc: &Option<PathBuf>,
+        gdb: &Option<PathBuf>,
+    ) -> Result<()> {
         let parent = self.config_file.parent().ok_or("Invalid settings path")?;
         fs::create_dir_all(parent).map_err(|e| format!("Cannot create settings directory: {e}"))?;
         let mut file = tempfile::NamedTempFile::new_in(parent)
             .map_err(|e| format!("Cannot save settings: {e}"))?;
-        serde_json::to_writer_pretty(&mut file, &preferences)
-            .map_err(|e| format!("Cannot encode settings: {e}"))?;
+        serde_json::to_writer_pretty(
+            &mut file,
+            &SavedSettings {
+                preferences: preferences.clone(),
+                gcc: gcc.clone(),
+                gdb: gdb.clone(),
+            },
+        )
+        .map_err(|e| format!("Cannot encode settings: {e}"))?;
         file.write_all(b"\n")
             .and_then(|()| file.as_file().sync_all())
             .map_err(|e| format!("Cannot save settings: {e}"))?;
@@ -162,9 +214,7 @@ impl Workspace {
         // active roots and settings remain intact if persistence fails.
         file.persist(&self.config_file)
             .map_err(|e| format!("Cannot replace settings: {e}"))?;
-        self.preferences = preferences;
-        self.active = Ok(roots);
-        Ok(self.settings())
+        Ok(())
     }
 
     fn area(&self, area: Area) -> Result<PathBuf> {
@@ -299,7 +349,7 @@ impl Workspace {
         let path = checked_path(&root, &relative_path(relative, directory)?)?;
         let metadata = safe_metadata(&path)?;
         if (directory && !metadata.is_dir()) || (!directory && !metadata.is_file()) {
-            return Err("Choose an Authored file or directory of the required type".into());
+            return Err("Choose a working file or directory of the required type".into());
         }
         Ok(path)
     }
@@ -310,7 +360,7 @@ impl Workspace {
             path.extension().and_then(|ext| ext.to_str()),
             Some("c" | "h" | "txt")
         ) {
-            return Err("The editor supports only .c, .h and .txt files in Authored".into());
+            return Err("The editor supports only .c, .h and .txt working files".into());
         }
         Ok(path)
     }
@@ -696,7 +746,7 @@ fn finish_copy(result: Result<()>, created: Vec<Created>) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn fixture() -> (tempfile::TempDir, Workspace) {
+    pub(super) fn fixture() -> (tempfile::TempDir, Workspace) {
         let dir = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(dir.path()).unwrap();
         let workspace = Workspace::load(
@@ -723,11 +773,17 @@ mod tests {
             temp_root: Some(original.temp.with_file_name("custom-temp")),
         };
         workspace.apply(preferences.clone()).unwrap();
+        let gcc = original.workspace.with_file_name("gcc.exe");
+        let gdb = original.workspace.with_file_name("gdb.exe");
+        workspace.save_tool(true, gcc.clone()).unwrap();
+        workspace.save_tool(false, gdb.clone()).unwrap();
         let reloaded = Workspace::load(
             workspace.config_file.clone(),
             workspace.default_workspace.clone(),
             workspace.default_temp.clone(),
         );
+        assert_eq!(reloaded.gcc, Some(gcc));
+        assert_eq!(reloaded.gdb, Some(gdb));
         assert_eq!(
             reloaded.active.unwrap().workspace,
             preferences.workspace_root.unwrap()

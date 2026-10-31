@@ -66,3 +66,49 @@ pre { padding: 12px; border-radius: 6px; background: #f4f6f8; white-space: pre-w
 dialog { color: #213047; border: 1px solid #b7c4d1; border-radius: 10px; padding: 24px; max-width: min(480px, 90vw); }
 dialog::backdrop { background: #18263680; }
 dialog .actions { margin-top: 20px; justify-content: flex-end; }
+.main-nav { display: flex; gap: 8px; border-bottom: 1px solid #d8e0e8; padding-bottom: 12px; }
+.main-nav [aria-current="page"], [aria-selected="true"], .library [aria-pressed="true"] { background: #e0edfa; border-color: #739bc5; }
+.activity { min-height: 34px; padding: 8px 0; font-size: 13px; color: #526174; }
+.learning-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 24px; align-items: start; }
+.learning-layout article { min-width: 0; }
+.library { padding: 16px; border: 1px solid #d8e0e8; border-radius: 10px; background: #fff; }
+.library h2, .library h3 { margin-bottom: 12px; }
+.library ul, .library ol, .stack { list-style: none; padding: 0; }
+.library li { margin: 8px 0; }
+.library li button { width: 100%; text-align: left; overflow-wrap: anywhere; }
+.library small { display: block; color: #526174; margin-top: 4px; }
+.notebook-block { margin: 20px 0; }
+.course-text, .exercise-card, .welcome { background: #fff; border: 1px solid #d8e0e8; border-radius: 10px; padding: 24px; }
+.course-text h1 { font-size: 24px; margin-bottom: 12px; }
+.course-text h2, .course-text h3 { margin: 18px 0 8px; }
+.course-text img { display: block; max-width: 100%; height: auto; margin: 12px 0; }
+.course-text pre { white-space: pre; }
+.course-text blockquote { border-left: 3px solid #739bc5; padding-left: 16px; margin-left: 0; }
+.image-error { color: #8d2922; }
+.reading-link { overflow-wrap: anywhere; }
+.exercise-card p { margin: 12px 0; }
+.notebook .editor-panel, .learning-layout article > .editor-panel { margin-top: 0; }
+.file-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.file-tabs button { font-size: 13px; overflow-wrap: anywhere; }
+.compile-settings, .input-panel { margin: 16px 0; }
+summary { cursor: pointer; margin-bottom: 12px; }
+.check { display: flex; align-items: center; gap: 8px; font-weight: 400; }
+.check input { flex: none; min-width: 0; }
+.input-panel textarea { width: 100%; resize: vertical; }
+.debug-panel { margin-top: 20px; padding-top: 16px; border-top: 1px solid #d8e0e8; }
+.debug-details { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.debug-details section { min-width: 0; overflow: auto; }
+table { border-collapse: collapse; width: 100%; text-align: left; font-size: 13px; }
+th, td { border-bottom: 1px solid #d8e0e8; padding: 8px; overflow-wrap: anywhere; }
+.stack button { text-align: left; width: 100%; margin-bottom: 4px; font-size: 13px; }
+.stack [aria-pressed="true"] { background: #fff3c9; }
+.stop { color: #8d2922; border-color: #bd6b65; }
+.breakpoint-marker { background: #c43d3d; border-radius: 50%; width: 12px !important; height: 12px !important; margin: 4px; }
+.paused-line { background: #fff0aa80; }
+.settings-page { max-width: 900px; }
+@media (max-width: 760px) {
+  .learning-layout { grid-template-columns: 1fr; gap: 16px; }
+  .library ul, .library ol { display: flex; flex-wrap: wrap; gap: 6px; }
+  .library li { margin: 0; }
+  .debug-details { grid-template-columns: 1fr; }
+}
