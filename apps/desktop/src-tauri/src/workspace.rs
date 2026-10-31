@@ -279,64 +279,6 @@ impl Workspace {
         })
     }
 
-    pub fn import(&self, source: PathBuf) -> Result<()> {
-        if !source.is_absolute() {
-            return Err("Import source must be an absolute path".into());
-        }
-        check_absolute_chain(&source)?;
-        let source = canonical(&source)?;
-        let destination_root = self.area(Area::Imported)?;
-        // Check physical ancestry before scanning: importing a parent of the
-        // destination would otherwise recursively import the copy itself.
-        if contains_path(&source, &destination_root)? {
-            return Err("Import source cannot contain Imported".into());
-        }
-        let name = source.file_name().ok_or("Import source must have a name")?;
-        let destination = destination_root.join(name);
-        copy_new(&source, &destination)
-    }
-
-    pub fn copy_to_authored(&self, relative: &str) -> Result<()> {
-        let relative = relative_path(relative, false)?;
-        let imported = self.area(Area::Imported)?;
-        let source = checked_path(&imported, &relative)?;
-        scan_source(&source)?;
-        let authored = self.area(Area::Authored)?;
-        let mut created = Vec::new();
-        let result = (|| {
-            let mut parent = authored.clone();
-            if let Some(parts) = relative.parent() {
-                for part in parts.components() {
-                    parent.push(part);
-                    match fs::symlink_metadata(&parent) {
-                        Ok(_) => safe_directory(&parent)?,
-                        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                            create_directory(&parent, &mut created)?
-                        }
-                        Err(e) => return Err(format!("Cannot inspect destination: {e}")),
-                    }
-                }
-            }
-            copy_entry(&source, &authored.join(&relative), &mut created)
-        })();
-        finish_copy(result, created)
-    }
-
-    pub fn create_file(&self, parent: &str, filename: &str) -> Result<()> {
-        validate_filename(filename)?;
-        let root = self.area(Area::Authored)?;
-        let parent = checked_path(&root, &relative_path(parent, true)?)?;
-        safe_directory(&parent)?;
-        OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(parent.join(filename))
-            .map_err(|e| {
-                format!("Cannot create file (existing names are never overwritten): {e}")
-            })?;
-        Ok(())
-    }
-
     pub fn compile_roots(&self) -> Result<(PathBuf, PathBuf)> {
         let authored = self.area(Area::Authored)?;
         let temp = self.active.as_ref().map_err(Clone::clone)?.temp.clone();
@@ -581,40 +523,6 @@ fn check_absolute_chain(path: &Path) -> Result<()> {
             }
             _ => return Err("Path cannot contain '.' or '..'".into()),
         }
-    }
-    Ok(())
-}
-
-fn validate_filename(name: &str) -> Result<()> {
-    if name.trim().is_empty()
-        || name.ends_with([' ', '.'])
-        || name
-            .chars()
-            .any(|c| c.is_control() || "<>:\"/\\|?*".contains(c))
-    {
-        return Err("Invalid filename".into());
-    }
-    let stem = name
-        .split('.')
-        .next()
-        .unwrap_or("")
-        .trim_end()
-        .to_uppercase();
-    if ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"].contains(&stem.as_str())
-        || ["COM", "LPT"].iter().any(|prefix| {
-            stem.strip_prefix(prefix).is_some_and(|n| {
-                n.len() == 1 && matches!(n.as_bytes()[0], b'1'..=b'9')
-                    || ["¹", "²", "³"].contains(&n)
-            })
-        })
-    {
-        return Err("Windows reserved filenames are not allowed".into());
-    }
-    if !matches!(
-        Path::new(name).extension().and_then(|e| e.to_str()),
-        Some("c" | "h" | "txt")
-    ) {
-        return Err("New File supports only .c, .h and .txt".into());
     }
     Ok(())
 }
@@ -928,7 +836,7 @@ mod tests {
     }
 
     #[test]
-    fn imports_and_authored_copies_preserve_contents_structure_and_existing_targets() {
+    fn copies_and_listing_preserve_contents_structure_and_existing_targets() {
         let (dir, workspace) = fixture();
         let project = fs::canonicalize(dir.path()).unwrap().join("Example");
         fs::create_dir_all(project.join("include")).unwrap();
@@ -937,11 +845,11 @@ mod tests {
         }
         let single = project.with_file_name("single.bin");
         fs::write(&single, b"single").unwrap();
-        workspace.import(single.clone()).unwrap();
-        workspace.import(project.clone()).unwrap();
-        assert!(workspace.import(project.clone()).is_err());
         let imported = workspace.area(Area::Imported).unwrap();
         let authored = workspace.area(Area::Authored).unwrap();
+        copy_new(&single, &imported.join("single.bin")).unwrap();
+        copy_new(&project, &imported.join("Example")).unwrap();
+        assert!(copy_new(&project, &imported.join("Example")).is_err());
         assert_eq!(
             workspace
                 .list(Area::Imported, "Example")
@@ -950,22 +858,18 @@ mod tests {
                 .len(),
             4
         );
-        assert!(workspace.import(imported.clone()).is_err());
         assert!(
             workspace
-                .import(imported.parent().unwrap().to_path_buf())
+                .import_learning(imported.parent().unwrap().to_path_buf(), false)
                 .is_err()
         );
-        workspace
-            .copy_to_authored("Example/include/math.h")
-            .unwrap();
-        assert!(
-            workspace
-                .copy_to_authored("Example/include/math.h")
-                .is_err()
-        );
-        assert!(workspace.copy_to_authored("Example").is_err()); // no merge
-        workspace.copy_to_authored("single.bin").unwrap();
+        fs::create_dir_all(authored.join("Example/include")).unwrap();
+        let source = imported.join("Example/include/math.h");
+        let target = authored.join("Example/include/math.h");
+        copy_new(&source, &target).unwrap();
+        assert!(copy_new(&source, &target).is_err());
+        assert!(copy_new(&imported.join("Example"), &authored.join("Example")).is_err());
+        copy_new(&imported.join("single.bin"), &authored.join("single.bin")).unwrap();
         fs::write(authored.join("Example/include/math.h"), b"edited copy").unwrap();
         assert_eq!(
             fs::read(imported.join("Example/include/math.h")).unwrap(),
@@ -975,8 +879,8 @@ mod tests {
         let other = project.with_file_name("Other");
         fs::create_dir(&other).unwrap();
         fs::write(other.join("image.png"), b"image").unwrap();
-        workspace.import(other).unwrap();
-        workspace.copy_to_authored("Other").unwrap();
+        copy_new(&other, &imported.join("Other")).unwrap();
+        copy_new(&imported.join("Other"), &authored.join("Other")).unwrap();
         assert_eq!(
             fs::read(authored.join("Other/image.png")).unwrap(),
             b"image"
@@ -1008,9 +912,8 @@ mod tests {
             for (i, name) in names.iter().enumerate() {
                 fs::write(special.join(&nested).join(name), [i as u8]).unwrap();
             }
-            workspace.import(special.clone()).unwrap();
+            copy_new(&special, &imported.join(&folder)).unwrap();
             let root_listing = workspace.list(Area::Imported, "").unwrap();
-            // This is also the JSON returned across the Tauri boundary.
             serde_json::to_value(&root_listing).unwrap();
             let lesson = root_listing
                 .entries
@@ -1037,9 +940,13 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(similar.len(), 2);
             assert_ne!(similar[0].relative_path, similar[1].relative_path);
+            fs::create_dir_all(authored.join(&folder).join(&nested)).unwrap();
             for entry in &listing.entries {
-                workspace.copy_to_authored(&entry.relative_path).unwrap();
-                assert!(workspace.copy_to_authored(&entry.relative_path).is_err());
+                let relative = relative_path(&entry.relative_path, false).unwrap();
+                let source = checked_path(&imported, &relative).unwrap();
+                let target = authored.join(&relative);
+                copy_new(&source, &target).unwrap();
+                assert!(copy_new(&source, &target).is_err());
             }
             for (i, name) in names.iter().enumerate() {
                 for base in [&special, &imported.join(&folder), &authored.join(&folder)] {
@@ -1050,15 +957,11 @@ mod tests {
                 .list(Area::Authored, &child.relative_path)
                 .unwrap();
             assert_eq!(authored_listing.entries.len(), names.len());
-            workspace
-                .create_file(&child.relative_path, "new.c")
-                .unwrap();
-            assert!(authored.join(&folder).join(&nested).join("new.c").is_file());
             // Whole-folder copies retain the same native names as selected files.
             let other_name = OsString::from_vec(b"Whole-\xfe".to_vec());
             let whole = special.with_file_name(&other_name);
             fs::rename(&special, &whole).unwrap();
-            workspace.import(whole).unwrap();
+            copy_new(&whole, &imported.join(&other_name)).unwrap();
             let entry = workspace
                 .list(Area::Imported, "")
                 .unwrap()
@@ -1066,7 +969,12 @@ mod tests {
                 .into_iter()
                 .find(|e| e.name == other_name.to_string_lossy())
                 .unwrap();
-            workspace.copy_to_authored(&entry.relative_path).unwrap();
+            let relative = relative_path(&entry.relative_path, false).unwrap();
+            copy_new(
+                &checked_path(&imported, &relative).unwrap(),
+                &authored.join(relative),
+            )
+            .unwrap();
             assert_eq!(
                 fs::read(authored.join(&other_name).join(&nested).join(&names[4])).unwrap(),
                 [4]
@@ -1147,37 +1055,8 @@ mod tests {
     }
 
     #[test]
-    fn new_file_and_relative_operations_enforce_authored_boundaries() {
+    fn relative_listing_enforces_area_boundaries() {
         let (_dir, workspace) = fixture();
-        let authored = workspace.area(Area::Authored).unwrap();
-        fs::create_dir(authored.join("nested")).unwrap();
-        for name in ["hello.c", "math.h", "data.txt"] {
-            workspace.create_file("nested", name).unwrap();
-            assert!(
-                fs::read(authored.join("nested").join(name))
-                    .unwrap()
-                    .is_empty()
-            );
-            assert!(workspace.create_file("nested", name).is_err());
-        }
-        for name in [
-            "",
-            " ",
-            "../hello.c",
-            "folder/hello.c",
-            "folder\\hello.c",
-            "hello.exe",
-            "CON.c",
-            "nul.txt",
-            "COM1.h",
-            "LPT¹.c",
-            "trailing.c ",
-            "bad:.c",
-            ".",
-            "..",
-        ] {
-            assert!(workspace.create_file("", name).is_err(), "accepted {name}");
-        }
         for path in [
             "../Imported",
             "/tmp",
@@ -1188,14 +1067,8 @@ mod tests {
             "nested/%2Fescape",
             "%00",
         ] {
-            assert!(workspace.create_file(path, "bad.c").is_err());
-            assert!(workspace.copy_to_authored(path).is_err());
             assert!(workspace.list(Area::Authored, path).is_err());
         }
-        assert!(workspace.create_file("missing", "bad.c").is_err());
-        fs::write(authored.join("existing.c"), b"keep").unwrap();
-        assert!(workspace.create_file("", "existing.c").is_err());
-        assert_eq!(fs::read(authored.join("existing.c")).unwrap(), b"keep");
     }
 
     #[cfg(any(unix, windows))]
@@ -1216,7 +1089,7 @@ mod tests {
 
     #[test]
     #[cfg(any(unix, windows))]
-    fn links_and_junctions_cannot_bypass_import_copy_or_root_boundaries() {
+    fn links_and_junctions_cannot_bypass_import_or_root_boundaries() {
         let (dir, mut workspace) = fixture();
         let base = fs::canonicalize(dir.path()).unwrap();
         let root = workspace.default_workspace.clone();
@@ -1234,11 +1107,10 @@ mod tests {
         fs::create_dir(&source).unwrap();
         fs::write(source.join("normal.c"), b"keep").unwrap();
         directory_link(&root, &source.join("link"));
-        assert!(workspace.import(source).is_err());
-        assert!(!root.join("Imported/LinkedProject").exists());
+        assert!(workspace.import_learning(source, false).is_err());
+        assert!(workspace.library().unwrap().projects.is_empty());
         let imported = workspace.area(Area::Imported).unwrap();
         directory_link(&root, &imported.join("link"));
-        assert!(workspace.copy_to_authored("link").is_err());
         assert!(workspace.list(Area::Imported, "link").is_err());
         assert!(
             workspace
@@ -1250,7 +1122,7 @@ mod tests {
         );
         let authored = workspace.area(Area::Authored).unwrap();
         directory_link(&root, &authored.join("link"));
-        assert!(workspace.create_file("link", "bad.c").is_err());
+        assert!(workspace.authored_path("link", true).is_err());
         let other = base.join("Other");
         fs::create_dir(&other).unwrap();
         // Existing area roots must also reject links during startup.
