@@ -4,6 +4,7 @@ pub mod build;
 pub mod debug;
 pub mod run;
 pub mod toolchain;
+pub mod toolchain_setup;
 
 mod process;
 mod runtime;

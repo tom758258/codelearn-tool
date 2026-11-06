@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import type { CompileState, Preferences, Settings, Tool } from './types'
+import ToolchainSetup from './ToolchainSetup'
 
 type Props = {
   settings: Settings; compilation: CompileState; locked: boolean; ready: boolean
@@ -28,5 +29,6 @@ export default function SettingsPanel({ settings, compilation, locked, ready, pe
       <fieldset disabled={locked || !ready}><div className="actions"><button onClick={() => void perform(async () => { onCompilation(await invoke<CompileState>('discover_toolchains')) }, 'Checking installed tools…')}>Find installed tools</button><select aria-label="Tool" value={tool} onChange={event => setTool(event.target.value as Tool)}><option>GCC</option><option>GDB</option></select><input aria-label="Tool executable path" value={toolPath} onChange={event => setToolPath(event.target.value)} placeholder="Absolute path to the executable" /><button onClick={() => void perform(async () => { const path = await open({ directory: false, multiple: false, title: `Choose ${tool}` }); if (path) setToolPath(path) })}>Browse</button><button disabled={!toolPath} onClick={() => void perform(async () => { onCompilation(await invoke<CompileState>('validate_toolchain', { tool, path: toolPath })) }, `Checking ${tool}…`)}>Check tool</button></div></fieldset>
       <ul className="tools">{compilation.candidates.map(candidate => <li key={candidate.id}><div><strong>{candidate.tool}</strong><p>{candidate.path}</p><p>{candidate.version}</p>{candidate.error && <p className="tool-error">{candidate.error}</p>}{candidate.details && <details><summary>Validation details</summary><pre>{candidate.details}</pre></details>}</div><button disabled={locked || !candidate.usable} onClick={() => void perform(async () => { onCompilation(await invoke<CompileState>('select_toolchain', { id: candidate.id })) })}>Use {candidate.tool}</button></li>)}</ul>
     </section>
+    <ToolchainSetup locked={locked} ready={ready} perform={perform} />
   </div>
 }

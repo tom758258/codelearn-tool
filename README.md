@@ -10,9 +10,9 @@ The Tauri 2 desktop provides **Courses**, **Projects**, and **Settings**. Read o
 
 Tauri 2 桌面程式提供 **Courses**、**Projects** 與 **Settings**。可依序閱讀 Markdown 教材與本機圖片，在多個 Monaco 分頁編輯獨立的練習副本，並建置、執行或除錯 C 程式。支援完整課程資料夾及一般 C 專案資料夾匯入；GCC/GDB 選擇會保存，並於啟動時重新驗證。
 
-Toolchain installation, course authoring, and learning progress are **not implemented**. Files and settings stay on this machine. No telemetry, cloud services, or learning-record storage is included. See the bilingual [course format guide](docs/course-format.md) and [sample course](examples/first-steps).
+Windows Settings includes a read-only MSYS2 UCRT64 setup check, package preview, and official setup guidance. **Automatic installation remains blocked** because pacman preview cannot guarantee that existing packages will stay unchanged. See the bilingual [toolchain setup guide](docs/toolchain-setup.md). Course authoring and learning progress are not implemented. Files and settings stay on this machine. No telemetry, cloud services, or learning-record storage is included. See the bilingual [course format guide](docs/course-format.md) and [sample course](examples/first-steps).
 
-工具鏈安裝、課程編製及學習進度均**尚未實作**。檔案與設定保留在本機，不包含遙測、雲端服務或學習紀錄儲存。請參閱雙語的[課程格式說明](docs/course-format.md)與[範例課程](examples/first-steps)。
+Windows Settings 提供唯讀的 MSYS2 UCRT64 環境檢查、套件預覽及官方設定引導。由於 pacman 預覽不能保證既有套件不受變更，**自動安裝仍保持停用**；請參閱雙語的[工具鏈設定說明](docs/toolchain-setup.md)。課程編製及學習進度尚未實作。檔案與設定保留在本機，不包含遙測、雲端服務或學習紀錄儲存。請參閱雙語的[課程格式說明](docs/course-format.md)與[範例課程](examples/first-steps)。
 
 Core callers explicitly select an absolute GCC executable path and provide existing, separate Workspace and CodeLearnTemp directories. Selected `.c` files, logical source directories, and include directories must resolve inside the Workspace. Text input is compiled from a private snapshot and may link additional selected `.c` files. GCC is validated by a real compile/link; GDB is checked independently for version/startup only. Discovery suggests usable candidates in explicit-path, PATH, then common-location order and never selects one automatically.
 
