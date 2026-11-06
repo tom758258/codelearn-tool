@@ -7,6 +7,11 @@ GCC/GDB tools can come from MSYS2 or another installation. A tool is selected an
 saved only when you click **Use GCC** or **Use GDB**. Startup validates saved tools
 again; setup checks never choose a replacement automatically.
 
+A failed MSYS2 check leaves the active tool choices and candidate list unchanged.
+A completed check still invalidates tools that fail validation, following the
+existing rules. Different paths resolving to the same executable keep the active
+choice. Neither outcome overwrites saved tool paths; only **Use** saves a choice.
+
 On Windows, **Toolchain setup → Check MSYS2** checks `C:\msys64` by default. Use
 **Browse** or enter another absolute MSYS2 root directory. It does not scan drives.
 The check requires the UCRT64 directory, pacman executable, MSYS runtime, pacman
@@ -58,6 +63,10 @@ existing packages. These commands are guidance only; the app never executes them
 GCC/GDB 可以來自 MSYS2 或其他安裝來源，只有明確按 **Use GCC** 或 **Use GDB**
 才選用並保存。啟動時會重新驗證已保存的工具；環境檢查不會自動改選其他工具。
 
+MSYS2 檢查失敗時，工作階段中的工具選擇與候選清單保持原狀。檢查完成後，確實
+未通過驗證的工具仍依既有規則失效；不同路徑若指向同一執行檔，會保留目前選擇。
+這些結果都不覆寫已保存路徑，仍須明確按 **Use** 才保存新選擇。
+
 Windows 的 **Toolchain setup → Check MSYS2** 預設檢查 `C:\msys64`，可用
 **Browse** 或輸入另一個 MSYS2 根目錄的絕對路徑，不會掃描整碟。指定根目錄內須有
 UCRT64 目錄、pacman 執行檔、MSYS runtime、pacman 設定及本機套件資料庫。
@@ -96,13 +105,13 @@ pacman -S --needed mingw-w64-ucrt-x86_64-gdb
 
 The CLI preview cannot establish the required add-only transaction contract:
 
-- pacman's [`--print` implementation](https://github.com/msys2/msys2-pacman/blob/master/src/pacman/pacman.c)
+- pacman's [`--print` implementation](https://github.com/msys2/msys2-pacman/blob/e3dc296ba35d5039775c6e53decc7296b3bce396/src/pacman/pacman.c)
   enables `NOCONFLICTS` and `NOLOCK`: its checks differ from installation and it
   cannot hold the reviewed state until a separate install command.
-- The [`sync` implementation](https://github.com/msys2/msys2-pacman/blob/master/src/pacman/sync.c)
+- The [`sync` implementation](https://github.com/msys2/msys2-pacman/blob/e3dc296ba35d5039775c6e53decc7296b3bce396/src/pacman/sync.c)
   prints the transaction's **add** list and releases the transaction without
   committing it. This is not a complete machine-readable removal/replacement plan.
-- [`--needed`](https://github.com/msys2/msys2-pacman/blob/master/doc/pacman.8.asciidoc)
+- [`--needed`](https://github.com/msys2/msys2-pacman/blob/e3dc296ba35d5039775c6e53decc7296b3bce396/doc/pacman.8.asciidoc)
   skips up-to-date targets; it does not forbid upgrading installed packages.
 - MSYS2 [supports full system upgrades](https://www.msys2.org/docs/updating/).
   Cached repository metadata cannot establish current version consistency.
@@ -116,6 +125,29 @@ transaction mechanism that reliably enforces the existing no-update,
 no-replacement, no-removal and prior-dependency-confirmation requirements; parsing
 a successful preview or automatically answering pacman prompts is insufficient.
 
+Other mechanisms were considered as well. `IgnorePkg`, pinned versions, a local
+archive (`-U`), or download-only mode do not bind a user's reviewed dependency
+list to an unchanged, add-only transaction. Feeding confirmation into a running
+pacman would hold the transaction lock, but exposes a human-oriented prompt/table
+protocol rather than a complete typed transaction contract; MSYS2 also
+[patches question defaults to yes](https://github.com/msys2/MSYS2-packages/blob/1937b3b0268881eea0e687e824c52c97432aa667/pacman/0016-Change-default-answer-of-all-queries-to-yes.patch).
+Neither automatic yes/no answers nor a prompt timeout is an installation policy.
+
+libalpm does provide a possible foundation, rather than proving safe installation
+impossible: [`alpm_trans_init/prepare/commit`, `alpm_trans_get_add/remove`](https://github.com/msys2/msys2-pacman/blob/e3dc296ba35d5039775c6e53decc7296b3bce396/lib/libalpm/alpm.h)
+can keep one transaction locked while its complete package sets are checked and
+approved. The same API exposes `NOHOOKS`/`NOSCRIPTLET`, but suppressing arbitrary
+installation actions is not proof of a correct, supported tool installation.
+Using it here would still require supported Windows/MSYS runtime integration,
+configuration/signature handling, question callbacks, inspection of all package
+archives and hooks, and a lifecycle that never force-kills a committing
+transaction. None of those guarantees is established by the current CLI queries.
+
+An all-new, fully verified set with no required scripts/hooks could in principle
+be admitted within such a locked transaction. Package names and preview output
+alone cannot identify that case reliably. The current app therefore admits no
+installation case and makes no claim that half-automatic installation is complete.
+
 CLI 預覽無法建立必要的「只新增」交易保證：`--print` 會啟用 `NOCONFLICTS`／
 `NOLOCK`，檢查方式與真正安裝不同，且無法將已檢視狀態鎖定至另一個安裝命令；
 `sync` 只輸出交易的新增清單，隨後釋放交易，不是完整且可機器判讀的移除／替換計畫。
@@ -126,3 +158,20 @@ CLI 預覽無法建立必要的「只新增」交易保證：`--print` 會啟用
 因此本實作停在唯讀評估與手動引導，沒有為尚不可用的安裝操作新增安裝生命週期、
 取消或關閉控制。未來若要啟用安裝，須另外驗證能可靠執行禁止更新／替換／移除，
 以及事前確認新增相依的交易機制；成功解析預覽或自動回答 pacman 提示都不足以放行。
+
+其他方式亦有評估：`IgnorePkg`、固定版本、本機套件檔案（`-U`）或僅下載模式，都
+無法將使用者已檢視的相依清單綁定至不變且只新增的交易。對執行中的 pacman 輸入
+確認可以保留交易鎖，但提示／表格是給人閱讀的協定，不是完整的具型別交易契約；
+MSYS2 另有將提問預設答案改為 yes 的修補。因此自動回答提示或等待逾時都不能取代
+安裝政策。
+
+libalpm 並非完全無法達成：其 `alpm_trans_init/prepare/commit`、
+`alpm_trans_get_add/remove` 可以在同一筆持鎖交易內檢查完整套件集合並取得同意。
+API 也提供 `NOHOOKS`／`NOSCRIPTLET`，但略過安裝動作不代表工具已正確且受支援地
+安裝。要用於目前程式，仍須建立受支援的 Windows/MSYS runtime 接線、設定／簽章
+處理、提問 callback、完整套件檔案與 hooks 檢查，以及不會強制終止提交中交易的
+生命週期；目前的 CLI 查詢尚未建立這些保證。
+
+理論上，完整驗證、全部為新套件且無必要 scripts/hooks 的集合，可在上述持鎖交易內
+被允許。但僅看套件名稱與預覽無法可靠辨識該情境。因此目前程式不放行任何安裝情境，
+也不宣稱半自動安裝已完成。
