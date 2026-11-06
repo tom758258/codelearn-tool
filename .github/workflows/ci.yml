@@ -80,7 +80,7 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.github/workflows/ci.yml'
-      - name: Prepare UCRT64 GCC and GDB
+      - name: Prepare UCRT64 GCC for read-only MSYS2 checks
         if: runner.os == 'Windows' && steps.toolchain-changes.outputs.integration == 'true'
         id: msys2
         uses: msys2/setup-msys2@v2
@@ -89,7 +89,20 @@ jobs:
           update: true
           install: >-
             mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-gdb
+      - name: Test real MSYS2 read-only queries (Windows MSVC)
+        if: runner.os == 'Windows' && steps.toolchain-changes.outputs.integration == 'true'
+        shell: pwsh
+        env:
+          CODELEARN_TEST_MSYS2: ${{ steps.msys2.outputs.msys2-location }}
+          RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-msvc
+        run: cargo test --workspace --locked --test toolchain_setup -- --ignored --nocapture
+      - name: Prepare GDB for existing toolchain integration tests
+        if: runner.os == 'Windows' && steps.toolchain-changes.outputs.integration == 'true'
+        # CI provisioning only, after the read-only check has verified GDB is
+        # absent. This is the same disposable runner/package as before; it does
+        # not exercise or authorize a CodeLearn installation transaction.
+        shell: msys2 {0}
+        run: pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-gdb
       - name: Test with real GCC and GDB (Windows MSVC)
         if: runner.os == 'Windows' && steps.toolchain-changes.outputs.integration == 'true'
         shell: pwsh
