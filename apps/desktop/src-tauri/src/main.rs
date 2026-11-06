@@ -3,6 +3,7 @@
 mod compile;
 mod debug;
 mod run;
+mod toolchain_setup;
 mod workspace;
 
 use codelearn_tool_core::{build, toolchain};
@@ -169,6 +170,18 @@ async fn discover_toolchains(app: tauri::AppHandle) -> Result<View> {
 }
 
 #[tauri::command]
+async fn assess_toolchain_setup(
+    app: tauri::AppHandle,
+    root: Option<PathBuf>,
+    tools: Option<Vec<ToolKind>>,
+) -> Result<toolchain_setup::View> {
+    with_desktop(app, move |state| {
+        toolchain_setup::assess(state, root, tools)
+    })
+    .await
+}
+
+#[tauri::command]
 async fn validate_toolchain(app: tauri::AppHandle, tool: ToolKind, path: PathBuf) -> Result<View> {
     with_desktop(app, move |state| {
         if !path.is_absolute() {
@@ -302,6 +315,7 @@ fn main() {
             get_compile_state,
             set_compile_targets,
             discover_toolchains,
+            assess_toolchain_setup,
             validate_toolchain,
             select_toolchain,
             compile_sources,

@@ -364,17 +364,21 @@ impl Desktop {
 
     pub fn discovered(&mut self, candidates: Vec<Candidate>) {
         if self.gcc.as_ref().is_some_and(|selected| {
-            !candidates
-                .iter()
-                .any(|c| c.tool == Tool::Gcc && c.path == selected.path && c.validation.usable)
+            !candidates.iter().any(|c| {
+                c.tool == Tool::Gcc
+                    && same_tool_path(&c.path, &selected.path)
+                    && c.validation.usable
+            })
         }) {
             self.gcc = None;
             self.invalidate();
         }
         if self.gdb.as_ref().is_some_and(|selected| {
-            !candidates
-                .iter()
-                .any(|c| c.tool == Tool::Gdb && c.path == selected.path && c.validation.usable)
+            !candidates.iter().any(|c| {
+                c.tool == Tool::Gdb
+                    && same_tool_path(&c.path, &selected.path)
+                    && c.validation.usable
+            })
         }) {
             self.gdb = None;
         }
@@ -746,6 +750,10 @@ impl Desktop {
             breakpoints,
         })
     }
+}
+
+fn same_tool_path(candidate: &std::path::Path, selected: &std::path::Path) -> bool {
+    candidate == selected || same_file::is_same_file(candidate, selected).unwrap_or(false)
 }
 
 fn tool_stamp(path: &std::path::Path) -> Result<(u64, std::time::SystemTime)> {
