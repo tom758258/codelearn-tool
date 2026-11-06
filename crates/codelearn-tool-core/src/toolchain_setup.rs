@@ -205,11 +205,19 @@ fn valid_field(value: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || b"@._+:-".contains(&c))
 }
 
+fn valid_version(value: &str) -> bool {
+    // MSYS2 uses '~' instead of ':' between epoch and version.
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"@._+:-~".contains(&c))
+}
+
 fn parse_installed(text: &str) -> Result<BTreeMap<String, String>, String> {
     let mut packages = BTreeMap::new();
     for line in text.lines() {
         let fields: Vec<_> = line.split_whitespace().collect();
-        if fields.len() != 2 || fields.iter().any(|s| !valid_field(s)) {
+        if fields.len() != 2 || !valid_field(fields[0]) || !valid_version(fields[1]) {
             return Err(
                 "Unrecognized installed-package output. Check MSYS2 manually and retry".into(),
             );
@@ -237,7 +245,7 @@ fn parse_preview(text: &str, installed: &BTreeMap<String, String>) -> Result<Vec
         let (repository, name, version) = (*repository, *name, *version);
         if !valid_field(repository)
             || !valid_field(name)
-            || !valid_field(version)
+            || !valid_version(version)
             || packages.contains_key(name)
         {
             return Err(
@@ -272,8 +280,15 @@ mod tests {
 
     #[test]
     fn package_output_preserves_existing_changes_and_rejects_ambiguity() {
-        let installed =
-            parse_installed("pacman 6.1.0-1\nmingw-w64-ucrt-x86_64-gcc 14.1.0-1\n").unwrap();
+        let installed = parse_installed(
+            "pacman 6.1.0-1\nmingw-w64-ucrt-x86_64-gcc 14.1.0-1\nlibcrypt 2~4.4.38-1\n",
+        )
+        .unwrap();
+        let epoch_preview = parse_preview("msys\tlibcrypt\t2~4.4.40-1\n", &installed).unwrap();
+        assert_eq!(
+            epoch_preview[0].installed_version.as_deref(),
+            Some("2~4.4.38-1")
+        );
         let preview = parse_preview(
             "ucrt64\tmingw-w64-ucrt-x86_64-gcc\t15.1.0-1\nucrt64\tmingw-w64-ucrt-x86_64-gdb\t16.1-1\n",
             &installed,

@@ -64,7 +64,9 @@ fn finish_assessment(
     // Publish discovery only after pacman queries succeeded. A failed setup
     // check must not change the active selections or replace the candidate list.
     let assessment = assessment?;
-    lock(state)?.discovered(candidates);
+    if assessment.preview_error.is_none() {
+        lock(state)?.discovered(candidates);
+    }
     Ok(View {
         root: assessment.root,
         gcc_version: assessment.gcc_version,
@@ -177,6 +179,15 @@ mod tests {
                 ))
                 .is_err()
         );
+        let after = state
+            .operate(|state| Ok(serde_json::to_value(lock(state)?.view()).unwrap()))
+            .unwrap();
+        assert_eq!(after, before);
+        let mut partial = assessment(dir.path().to_owned());
+        partial.preview_error = Some("Synthetic pacman preview failure".into());
+        state
+            .operate(|state| finish_assessment(state, vec![], Ok(partial)))
+            .unwrap();
         let after = state
             .operate(|state| Ok(serde_json::to_value(lock(state)?.view()).unwrap()))
             .unwrap();
