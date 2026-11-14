@@ -72,7 +72,8 @@ fn main() {
     generated.push_str("];\n");
 
     fs::write(
-        PathBuf::from(env!("OUT_DIR")).join("bundled_course_files.rs"),
+        PathBuf::from(std::env::var("OUT_DIR").expect("Cargo OUT_DIR is unavailable"))
+            .join("bundled_course_files.rs"),
         generated,
     )
     .expect("Cannot write embedded course manifest");
