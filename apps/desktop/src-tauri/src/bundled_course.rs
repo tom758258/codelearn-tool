@@ -16,8 +16,12 @@ pub fn ensure_builtin_course(workspace: &Workspace) -> Result<Library> {
         .ok_or("The bundled course has no course.json")?;
     let course: serde_json::Value = serde_json::from_slice(manifest.1)
         .map_err(|e| format!("Invalid bundled course manifest: {e}"))?;
-    let id = course["id"].as_str().ok_or("Bundled course ID is missing")?;
-    let version = course["version"].as_str().ok_or("Bundled course version is missing")?;
+    let id = course["id"]
+        .as_str()
+        .ok_or("Bundled course ID is missing")?;
+    let version = course["version"]
+        .as_str()
+        .ok_or("Bundled course version is missing")?;
     if library
         .courses
         .iter()
@@ -34,7 +38,10 @@ pub fn ensure_builtin_course(workspace: &Workspace) -> Result<Library> {
         .map_err(|e| format!("Cannot prepare bundled course: {e}"))?;
     for (name, bytes) in BUNDLED_COURSE_FILES {
         let relative = Path::new(name);
-        if !relative.components().all(|part| matches!(part, Component::Normal(_))) {
+        if !relative
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
+        {
             return Err("Invalid path in bundled course".into());
         }
         let destination = staging.path().join(relative);
