@@ -52,3 +52,46 @@ pub fn ensure_builtin_course(workspace: &Workspace) -> Result<Library> {
     }
     workspace.import_learning(staging.path().to_path_buf(), true)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace::UnitKey;
+
+    #[test]
+    fn bundled_course_is_idempotent_and_preserves_student_work() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("config");
+        fs::create_dir_all(&config).unwrap();
+        let workspace = Workspace::load(
+            config.join("settings.json"),
+            directory.path().join("workspace"),
+            directory.path().join("cache"),
+        );
+        assert!(workspace.settings().error.is_none());
+
+        let first = ensure_builtin_course(&workspace).unwrap();
+        assert_eq!(first.courses.len(), 1);
+        let entry = &first.courses[0];
+        assert_eq!(entry.id, "c-foundations");
+        assert_eq!(entry.version, "1.0");
+        assert_eq!(workspace.course(&entry.key).unwrap().chapters.len(), 17);
+
+        let exercise = workspace
+            .unit(UnitKey::Course {
+                course: entry.key.clone(),
+                chapter: "c01-first-program".into(),
+                block: "exercise".into(),
+            })
+            .unwrap();
+        let path = exercise.targets.primary.as_deref().unwrap();
+        let before = workspace.read_authored(path).unwrap();
+        workspace
+            .save_authored(path, "// student edit\n", &before)
+            .unwrap();
+        let second = ensure_builtin_course(&workspace).unwrap();
+        assert_eq!(second.courses.len(), 1);
+        assert_eq!(second.courses[0].key, entry.key);
+        assert_eq!(workspace.read_authored(path).unwrap(), "// student edit\n");
+    }
+}
