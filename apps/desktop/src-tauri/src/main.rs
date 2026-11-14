@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod bundled_course;
 mod compile;
 mod debug;
 mod run;
@@ -35,6 +36,14 @@ async fn get_library(app: tauri::AppHandle) -> Result<Library> {
 async fn import_learning(app: tauri::AppHandle, source: PathBuf, course: bool) -> Result<Library> {
     with_desktop(app, move |state| {
         lock(state)?.workspace.import_learning(source, course)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn ensure_builtin_course(app: tauri::AppHandle) -> Result<Library> {
+    with_desktop(app, |state| {
+        bundled_course::ensure_builtin_course(&lock(state)?.workspace)
     })
     .await
 }
@@ -302,6 +311,7 @@ fn main() {
             get_workspace_settings,
             get_library,
             import_learning,
+            ensure_builtin_course,
             get_course,
             get_course_content,
             get_course_image,
