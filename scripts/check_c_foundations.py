@@ -77,7 +77,9 @@ def check() -> None:
                 if include != ".":
                     assert (source_dir / include).is_dir(), cid
 
-            binary = work / cid
+            run_dir = work / cid
+            run_dir.mkdir()
+            binary = run_dir / "program"
             build = subprocess.run(
                 ["gcc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic", "-g",
                  *map(str, to_compile), "-I", str(source_dir), "-o", str(binary)],
@@ -85,8 +87,6 @@ def check() -> None:
             )
             assert build.returncode == 0, f"{cid} compile failed:\n{build.stderr}"
             stdin, expected = EXPECTED[cid]
-            run_dir = work / cid
-            run_dir.mkdir()
             run = subprocess.run([str(binary)], input=stdin, text=True,
                                  capture_output=True, timeout=10, cwd=run_dir)
             assert run.returncode == 0 and run.stdout == expected, (

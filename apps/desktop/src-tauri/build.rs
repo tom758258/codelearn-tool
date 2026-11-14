@@ -30,10 +30,7 @@ fn main() {
     let mut files = Vec::new();
     collect_files(&root, &root, &mut files);
     files.sort();
-    assert!(
-        files.contains(&root.join("course.json")),
-        "Bundled course needs course.json"
-    );
+    assert!(files.contains(&root.join("course.json")), "Bundled course needs course.json");
 
     let mut generated = String::from(
         "pub(crate) const BUNDLED_COURSE_FILES: &[(&str, &[u8])] = &[\n",
