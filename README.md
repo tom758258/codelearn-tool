@@ -260,3 +260,9 @@ For downloads, open **Actions → Build Desktop → Run workflow** and select **
 [MIT](LICENSE). Third-party dependencies retain their respective licenses.
 
 [MIT](LICENSE)。第三方相依套件仍適用各自授權。
+
+## Bundled C course / 內建 C 課程
+
+The Windows standalone EXE and Linux AppImage contain **C 語言完整入門**, an offline Traditional Chinese beginner course with English technical terms and 17 chapters. On startup and after changing the workspace, the app makes this course available in that workspace if its course ID and version are not already present. Existing course versions, projects, and student edits are not replaced. **Courses → Import course** continues to accept other complete course folders. Reading lessons does not require a compiler; Build/Run requires a separately installed, validated GCC, and Debug requires GDB. No toolchain is installed automatically.
+
+Windows 單檔 EXE 與 Linux AppImage 內含離線的 **C 語言完整入門** 教材，以繁體中文為主、英文術語輔助，共 17 章。啟動程式及切換工作區時，若該工作區尚無相同課程 ID＋版本，就會加入內建課程；不覆寫既有課程版本、Projects 或學生修改。仍可透過 **Courses → Import course** 匯入其他完整課程資料夾。閱讀課文不需要編譯器，Build／Run 需要另行安裝並驗證的 GCC，Debug 需要 GDB；程式不會自行安裝工具鏈。

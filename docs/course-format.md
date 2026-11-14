@@ -37,3 +37,9 @@ Opening an exercise for the first time copies only its listed source files into 
 Import a complete ordinary C folder from **Projects → Import project**. It needs no CodeLearn manifest. The app edits its copied files, preserving the external folder. If there is exactly one `.c` file, it is selected as the main source; otherwise choose the main and additional C files under **Compile sources**. Include folders are optional. Choices are stored in the workspace's `Library/catalog.json`, outside project sources; no `.codelearn-project.json` is created. Makefile and CMake builds are not supported.
 
 透過 **Projects → Import project** 匯入完整的一般 C 資料夾，不需要 CodeLearn 專用描述檔。程式只編輯複製後的檔案，保留外部資料夾。若只有一個 `.c`，會選為主要來源；否則在 **Compile sources** 選擇主要與其他 C 檔案，也可選擇 Include 目錄。設定保存在工作區的 `Library/catalog.json`，位於專案來源之外，不會建立 `.codelearn-project.json`。不支援 Makefile 或 CMake 建置。
+
+## Bundled C course / 內建 C 課程
+
+The Windows standalone EXE and Linux AppImage contain **C 語言完整入門**, an offline Traditional Chinese beginner course with English technical terms and 17 chapters. On startup and after changing the workspace, the app makes this course available in that workspace if its course ID and version are not already present. Existing course versions, projects, and student edits are not replaced. **Courses → Import course** continues to accept other complete course folders. Reading lessons does not require a compiler; Build/Run requires a separately installed, validated GCC, and Debug requires GDB. No toolchain is installed automatically.
+
+Windows 單檔 EXE 與 Linux AppImage 內含離線的 **C 語言完整入門** 教材，以繁體中文為主、英文術語輔助，共 17 章。啟動程式及切換工作區時，若該工作區尚無相同課程 ID＋版本，就會加入內建課程；不覆寫既有課程版本、Projects 或學生修改。仍可透過 **Courses → Import course** 匯入其他完整課程資料夾。閱讀課文不需要編譯器，Build／Run 需要另行安裝並驗證的 GCC，Debug 需要 GDB；程式不會自行安裝工具鏈。

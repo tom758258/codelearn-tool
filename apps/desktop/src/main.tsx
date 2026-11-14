@@ -78,12 +78,22 @@ function App() {
       operating.current = false; setBusy(false); setActivity('')
     }
   }
+
+  async function refreshCoursesWithBuiltIn() {
+    try {
+      setLibrary(await invoke<Library>('ensure_builtin_course'))
+    } catch (cause) {
+      // A failed built-in import must not hide already imported courses or projects.
+      setError(`Built-in course could not be loaded: ${String(cause)}`)
+      setLibrary(await invoke<Library>('get_library'))
+    }
+  }
   useEffect(() => {
     void (async () => {
       try {
         const current = await invoke<Settings>('get_workspace_settings')
         setSettings(current)
-        if (!current.error) setLibrary(await invoke<Library>('get_library'))
+        if (!current.error) await refreshCoursesWithBuiltIn()
         setCompilation(await invoke<CompileState>('restore_toolchains'))
       } catch (cause) { setError(String(cause)) }
       finally { operating.current = false; setBusy(false); setActivity('') }
@@ -352,7 +362,7 @@ function App() {
       if (discardChanges === null) return
       const next = await invoke<Settings>('apply_workspace_settings', { preferences, discardChanges })
       setSettings(next); clearUnit(null); setCourse(null)
-      setLibrary(await invoke<Library>('get_library')); setMessage('Workspace settings saved.')
+      await refreshCoursesWithBuiltIn(); setMessage('Workspace settings saved.')
     }} />}
     <dialog ref={dialog} onCancel={event => { event.preventDefault(); choose('cancel') }}><h2>{question?.kind === 'save' ? 'Unsaved changes' : question?.kind === 'reset' ? 'Reset exercise' : 'Cleanup warning'}</h2><p>{question?.text}</p><div className="actions">{question?.kind === 'save' ? <><button onClick={() => choose('cancel')}>Cancel</button><button onClick={() => choose('discard')}>Discard</button><button className="primary" onClick={() => choose('save')}>Save</button></> : <><button onClick={() => choose('cancel')}>{question?.kind === 'cleanup' ? 'Keep open' : 'Cancel'}</button><button onClick={() => choose('confirm')}>{question?.kind === 'cleanup' ? 'Close anyway' : 'Reset exercise'}</button></>}</div></dialog>
   </main>

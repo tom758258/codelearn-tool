@@ -1,0 +1,529 @@
+{
+  "id": "c-foundations",
+  "version": "1.0",
+  "title": "C 語言完整入門：從第一個程式到多檔實作",
+  "chapters": [
+    {
+      "id": "c01-first-program",
+      "title": "01｜第一個 C 程式",
+      "blocks": [
+        {
+          "kind": "content",
+          "id": "concepts",
+          "markdown": "chapters/c01-first-program/concepts.md"
+        },
+        {
+          "kind": "program",
+          "id": "exercise",
+          "title": "認識 C 程式結構",
+          "directory": "chapters/c01-first-program/exercise",
+          "files": [
+            "main.c"
+          ],
+          "targets": {
+            "primary": "main.c",
+            "additional": [],
+            "includes": []
+          }
+        },
+        {
+          "kind": "content",
+          "id": "review",
+          "markdown": "chapters/c01-first-program/review.md"
+        }
+      ]
+    },
+    {
+      "id": "c02-types-variables",
+      "title": "02｜變數與資料型態",
+      "blocks": [
+        {
+          "kind": "content",
+          "id": "concepts",
+          "markdown": "chapters/c02-types-variables/concepts.md"
+        },
+        {
+          "kind": "program",
+          "id": "exercise",
+          "title": "儲存與顯示資料",
+          "directory": "chapters/c02-types-variables/exercise",
+          "files": [
+            "main.c"
+          ],
+          "targets": {
+            "primary": "main.c",
+            "additional": [],
+            "includes": []
+          }
+        },
+        {
+          "kind": "content",
+          "id": "review",
+          "markdown": "chapters/c02-types-variables/review.md"
+        }
+      ]
+    },
+    {
+      "id": "c03-expressions",
+      "title": "03｜運算子與型別轉換",
+      "blocks": [
+        {
+          "kind": "content",
+          "id": "concepts",
+          "markdown": "chapters/c03-expressions/concepts.md"
+        },
+        {
+          "kind": "program",
+          "id": "exercise",
+          "title": "理解結果如何計算",
+          "directory": "chapters/c03-expressions/exercise",
+          "files": [
+            "main.c"
+          ],
+          "targets": {
+            "primary": "main.c",
+            "additional": [],
+            "includes": []
+          }
+        },
+        {
+          "kind": "content",
+          "id": "review",
+          "markdown": "chapters/c03-expressions/review.md"
+        }
+      ]
+    },
+    {
+      "id": "c04-input-output",
+      "title": "04｜標準輸入與輸出",
+      "blocks": [
+        {
+          "kind": "content",
+          "id": "concepts",
+          "markdown": "chapters/c04-input-output/concepts.md"
+        },
+        {
+          "kind": "program",
+          "id": "exercise",
+          "title": "在啟動前提供輸入",
+          "directory": "chapters/c04-input-output/exercise",
+          "files": [
+            "main.c"
+          ],
+          "targets": {
+            "primary": "main.c",
+            "additional": [],
+            "includes": []
+          }
+        },
+        {
+          "kind": "content",
+          "id": "review",
+          "markdown": "chapters/c04-input-output/review.md"
+        }
+      ]
+    },
+    {
+      "id": "c05-conditions",
+      "title": "05｜條件判斷",
+      "blocks": [
+        {
+          "kind": "content",
+          "id": "concepts",
+          "markdown": "chapters/c05-conditions/concepts.md"
+        },
+        {
+          "kind": "program",
+          "id": "exercise",
+          "title": "依條件選擇路徑",
+          "directory": "chapters/c05-conditions/exercise",
+          "files": [
+            "main.c"
+          ],
+          "targets": {
+            "primary": "main.c",
+            "additional": [],
+            "includes": []
+          }
+        },
+        {
+          "kind": "content",
+          "id": "review",
+          "markdown": "chapters/c05-conditions/review.md"
+        }
+      ]
+    },
+    {
+      "id": "c06-loops",
+      "title": "06｜迴圈",
+      "blocks": [
+        {
+          "kind": "content",
+          "id": "concepts",
+          "markdown": "chapters/c06-loops/concepts.md"
+        },
+        {
+          "kind": "program",
+          "id": "exercise",
+          "title": "重複執行與終止條件",
+          "directory": "chapters/c06-loops/exercise",
+          "files": [
+            "main.c"
+          ],
+          "targets": {
+            "primary": "main.c",
+            "additional": [],
+            "includes": []
+          }
+        },
+        {
+          "kind": "content",
+          "id": "review",
+          "markdown": "chapters/c06-loops/review.md"
+        }
+      ]
+    },
+    {
+      "id": "c07-functions",
+      "title": "07｜函式與作用域",
+      "blocks": [
+        {
+          "kind": "content",
+          "id": "concepts",
+          "markdown": "chapters/c07-functions/concepts.md"
+        },
+        {
+          "kind": "program",
+          "id": "exercise",
+          "title": "拆解可重用的運算",
+          "directory": "chapters/c07-functions/exercise",
+          "files": [
+            "main.c"
+          ],
+          "targets": {
+            "primary": "main.c",
+            "additional": [],
+            "includes": []
+          }
+        },
+        {
+          "kind": "content",
+          "id": "review",
+          "markdown": "chapters/c07-functions/review.md"
+        }
+      ]
+    },
+    {
+      "id": "c08-arrays",
+      "title": "08｜陣列",
+      "blocks": [
+        {
+          "kind": "content",
+          "id": "concepts",
+          "markdown": "chapters/c08-arrays/concepts.md"
+        },
+        {
+          "kind": "program",
+          "id": "exercise",
+          "title": "管理一組數值",
+          "directory": "chapters/c08-arrays/exercise",
+          "files": [
+            "main.c"
+          ],
+          "targets": {
+            "primary": "main.c",
+            "additional": [],
+            "includes": []
+          }
+        },
+        {
+          "kind": "content",
+          "id": "review",
+          "markdown": "chapters/c08-arrays/review.md"
+        }
+      ]
+    },
+    {
+      "id": "c09-characters-strings",
+      "title": "09｜字元與字串",
+      "blocks": [
+        {
+          "kind": "content",
+          "id": "concepts",
+          "markdown": "chapters/c09-characters-strings/concepts.md"
+        },
+        {
+          "kind": "program",
+          "id": "exercise",
+          "title": "認識終止字元與有界讀取",
+          "directory": "chapters/c09-characters-strings/exercise",
+          "files": [
+            "main.c"
+          ],
+          "targets": {
+            "primary": "main.c",
+            "additional": [],
+            "includes": []
+          }
+        },
+        {
+          "kind": "content",
+          "id": "review",
+          "markdown": "chapters/c09-characters-strings/review.md"
+        }
+      ]
+    },
+    {
+      "id": "c10-pointers",
+      "title": "10｜指標基礎",
+      "blocks": [
+        {
+          "kind": "content",
+          "id": "concepts",
+          "markdown": "chapters/c10-pointers/concepts.md"
+        },
+        {
+          "kind": "program",
+          "id": "exercise",
+          "title": "理解位址與解參照",
+          "directory": "chapters/c10-pointers/exercise",
+          "files": [
+            "main.c"
+          ],
+          "targets": {
+            "primary": "main.c",
+            "additional": [],
+            "includes": []
+          }
+        },
+        {
+          "kind": "content",
+          "id": "review",
+          "markdown": "chapters/c10-pointers/review.md"
+        }
+      ]
+    },
+    {
+      "id": "c11-arrays-pointers",
+      "title": "11｜陣列與指標的關係",
+      "blocks": [
+        {
+          "kind": "content",
+          "id": "concepts",
+          "markdown": "chapters/c11-arrays-pointers/concepts.md"
+        },
+        {
+          "kind": "program",
+          "id": "exercise",
+          "title": "把一組資料傳給函式",
+          "directory": "chapters/c11-arrays-pointers/exercise",
+          "files": [
+            "main.c"
+          ],
+          "targets": {
+            "primary": "main.c",
+            "additional": [],
+            "includes": []
+          }
+        },
+        {
+          "kind": "content",
+          "id": "review",
+          "markdown": "chapters/c11-arrays-pointers/review.md"
+        }
+      ]
+    },
+    {
+      "id": "c12-structures",
+      "title": "12｜結構、列舉與 typedef",
+      "blocks": [
+        {
+          "kind": "content",
+          "id": "concepts",
+          "markdown": "chapters/c12-structures/concepts.md"
+        },
+        {
+          "kind": "program",
+          "id": "exercise",
+          "title": "組織相關的資料",
+          "directory": "chapters/c12-structures/exercise",
+          "files": [
+            "main.c"
+          ],
+          "targets": {
+            "primary": "main.c",
+            "additional": [],
+            "includes": []
+          }
+        },
+        {
+          "kind": "content",
+          "id": "review",
+          "markdown": "chapters/c12-structures/review.md"
+        }
+      ]
+    },
+    {
+      "id": "c13-dynamic-memory",
+      "title": "13｜動態記憶體",
+      "blocks": [
+        {
+          "kind": "content",
+          "id": "concepts",
+          "markdown": "chapters/c13-dynamic-memory/concepts.md"
+        },
+        {
+          "kind": "program",
+          "id": "exercise",
+          "title": "配置、檢查與釋放",
+          "directory": "chapters/c13-dynamic-memory/exercise",
+          "files": [
+            "main.c"
+          ],
+          "targets": {
+            "primary": "main.c",
+            "additional": [],
+            "includes": []
+          }
+        },
+        {
+          "kind": "content",
+          "id": "review",
+          "markdown": "chapters/c13-dynamic-memory/review.md"
+        }
+      ]
+    },
+    {
+      "id": "c14-file-io",
+      "title": "14｜檔案處理",
+      "blocks": [
+        {
+          "kind": "content",
+          "id": "concepts",
+          "markdown": "chapters/c14-file-io/concepts.md"
+        },
+        {
+          "kind": "program",
+          "id": "exercise",
+          "title": "在同次執行中寫入與讀取",
+          "directory": "chapters/c14-file-io/exercise",
+          "files": [
+            "main.c"
+          ],
+          "targets": {
+            "primary": "main.c",
+            "additional": [],
+            "includes": []
+          }
+        },
+        {
+          "kind": "content",
+          "id": "review",
+          "markdown": "chapters/c14-file-io/review.md"
+        }
+      ]
+    },
+    {
+      "id": "c15-modules",
+      "title": "15｜標頭檔與多檔程式",
+      "blocks": [
+        {
+          "kind": "content",
+          "id": "concepts",
+          "markdown": "chapters/c15-modules/concepts.md"
+        },
+        {
+          "kind": "program",
+          "id": "exercise",
+          "title": "從單檔走向模組化",
+          "directory": "chapters/c15-modules/exercise",
+          "files": [
+            "main.c",
+            "utils.h",
+            "utils.c"
+          ],
+          "targets": {
+            "primary": "main.c",
+            "additional": [
+              "utils.c"
+            ],
+            "includes": [
+              "."
+            ]
+          }
+        },
+        {
+          "kind": "content",
+          "id": "review",
+          "markdown": "chapters/c15-modules/review.md"
+        }
+      ]
+    },
+    {
+      "id": "c16-debugging",
+      "title": "16｜系統化除錯",
+      "blocks": [
+        {
+          "kind": "content",
+          "id": "concepts",
+          "markdown": "chapters/c16-debugging/concepts.md"
+        },
+        {
+          "kind": "program",
+          "id": "exercise",
+          "title": "找到可編譯的邏輯錯誤",
+          "directory": "chapters/c16-debugging/exercise",
+          "files": [
+            "main.c"
+          ],
+          "targets": {
+            "primary": "main.c",
+            "additional": [],
+            "includes": []
+          }
+        },
+        {
+          "kind": "content",
+          "id": "review",
+          "markdown": "chapters/c16-debugging/review.md"
+        }
+      ]
+    },
+    {
+      "id": "c17-capstone",
+      "title": "17｜綜合練習：商品清單",
+      "blocks": [
+        {
+          "kind": "content",
+          "id": "concepts",
+          "markdown": "chapters/c17-capstone/concepts.md"
+        },
+        {
+          "kind": "program",
+          "id": "exercise",
+          "title": "閱讀、修改並追蹤多檔 C 程式",
+          "directory": "chapters/c17-capstone/exercise",
+          "files": [
+            "main.c",
+            "inventory.h",
+            "inventory.c"
+          ],
+          "targets": {
+            "primary": "main.c",
+            "additional": [
+              "inventory.c"
+            ],
+            "includes": [
+              "."
+            ]
+          }
+        },
+        {
+          "kind": "content",
+          "id": "review",
+          "markdown": "chapters/c17-capstone/review.md"
+        }
+      ]
+    }
+  ]
+}
