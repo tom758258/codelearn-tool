@@ -18,7 +18,7 @@ Markdown 裡的 C 範例僅供閱讀。請使用下方的 `Open exercise` 進入
 
 ## 先預測，再實作
 
-先猜猜 `printf` 會顯示什麼。開啟 `hello` 練習並按 `Run`，再把字串內容從 `Hello, C!` 改成 `My first program`，儲存並重新執行。比較兩次輸出。
+先猜猜 `printf` 會顯示什麼。開啟畫面上標示為「認識 C 程式結構」的練習，按 **Open exercise** 進入後使用 **Run**，再把字串內容從 `Hello, C!` 改成 `My first program`，儲存並重新執行。比較兩次輸出。
 
 請按本章的 **Open exercise** 開啟練習，修改已提供的檔案，再使用 **Run** 觀察 **Program output**。Markdown 中的程式碼僅供閱讀，不會直接執行。`Run` 前請依現有流程保存程式碼；若缺少 GCC 可先閱讀課文，之後到 **Settings** 選擇通過驗證的 GCC。執行或除錯不會自動安裝工具鏈。
 

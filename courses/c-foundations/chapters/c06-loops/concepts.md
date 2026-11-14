@@ -23,3 +23,17 @@
 請按本章的 **Open exercise** 開啟練習，修改已提供的檔案，再使用 **Run** 觀察 **Program output**。Markdown 中的程式碼僅供閱讀，不會直接執行。`Run` 前請依現有流程保存程式碼；若缺少 GCC 可先閱讀課文，之後到 **Settings** 選擇通過驗證的 GCC。執行或除錯不會自動安裝工具鏈。
 
 需要 Debug 的延伸練習請使用既有的 **Debug**、Breakpoint、Step 與 Variables；一般 Run 不會即時追蹤變數。
+
+## 延伸練習：改寫成 `while`
+
+完成前面的 `for` 練習後，在同一個 `main.c` 中把整段 `for` 迴圈替換成以下內容；保留原本的 `const int limit = 5;` 與 `int sum = 0;`：
+
+```c
+int i = 1;
+while (i <= limit) {
+    sum += i;
+    ++i;
+}
+```
+
+重新 **Run**，預期仍顯示 `Sum 1..5: 15`；將 `limit` 改成 `3` 後應顯示 `Sum 1..3: 6`。觀察 `while` 把初始值放在迴圈外、更新放在迴圈內；**不要漏掉 `++i`**，否則迴圈可能不會結束。需要恢復 `for` 範例時，使用既有 **Reset exercise**。

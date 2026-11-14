@@ -23,3 +23,17 @@ C 字串通常是一個 `char` 陣列，以空字元（null terminator，`\0`）
 請按本章的 **Open exercise** 開啟練習，修改已提供的檔案，再使用 **Run** 觀察 **Program output**。Markdown 中的程式碼僅供閱讀，不會直接執行。`Run` 前請依現有流程保存程式碼；若缺少 GCC 可先閱讀課文，之後到 **Settings** 選擇通過驗證的 GCC。執行或除錯不會自動安裝工具鏈。
 
 需要 Debug 的延伸練習請使用既有的 **Debug**、Breakpoint、Step 與 Variables；一般 Run 不會即時追蹤變數。
+
+## 延伸練習：使用 `fgets` 有界輸入
+
+先完成前面的固定字串比較。接著在同一個 `main.c` 中，把 `char word[] = "cat";` 改成 `char word[16] = "cat";`，保留原有的 `const char target[] = "dog";` 和 `<stdio.h>`、`<string.h>`。在兩行 `printf` **之前**加入：
+
+```c
+if (fgets(word, sizeof word, stdin) == NULL) {
+    puts("No input");
+    return 1;
+}
+word[strcspn(word, "\n")] = '\0';
+```
+
+按 **Run** 前，先在 **Standard input** 填入 `dog`（可以包含結尾換行）。預期輸出為 `Length: 3` 和 `Equal: yes`；輸入 `cat` 則為 `Length: 3`、`Equal: no`。`fgets` 最多讀入 15 個字元並保留結尾 `\0`；`strcspn` 找出換行的位置，將它改成 `\0`，避免換行影響 `strcmp`。如果沒有輸入，程式會顯示 `No input` 並回傳非零狀態。本練習只使用短於 15 個字元的英文單字，不需處理過長輸入的後續讀取。需要回到原本固定字串版本時，使用 **Reset exercise**。
