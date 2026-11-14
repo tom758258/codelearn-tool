@@ -7,7 +7,9 @@ int main(void)
         puts("Cannot open output");
         return 1;
     }
-    if (fputs("Stock: 4\n", out) == EOF || fclose(out) == EOF) {
+    int wrote = fputs("Stock: 4\n", out) != EOF;
+    int closed = fclose(out) == 0;
+    if (!wrote || !closed) {
         puts("Cannot write report");
         return 1;
     }

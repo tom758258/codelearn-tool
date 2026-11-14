@@ -31,7 +31,7 @@ fn main() {
     collect_files(&root, &root, &mut files);
     files.sort();
     assert!(
-        files.iter().any(|path| path.file_name().is_some_and(|name| name == "course.json")),
+        files.contains(&root.join("course.json")),
         "Bundled course needs course.json"
     );
 

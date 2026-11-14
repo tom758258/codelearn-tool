@@ -10,7 +10,7 @@
 
 ## 核心觀念
 
-程式從 `main` 函式開始執行。`#include <stdio.h>` 引入標準輸入輸出函式的宣告，這是使用 `printf` 的必要準備。`printf` 會把資料寫到標準輸出（standard output，stdout）；`\\n` 是換行字元，與按 Enter 修改原始碼不是同一件事。
+程式從 `main` 函式開始執行。`#include <stdio.h>` 引入標準輸入輸出函式的宣告，這是使用 `printf` 的必要準備。`printf` 會把資料寫到標準輸出（standard output，stdout）；`\n` 是換行字元，與按 Enter 修改原始碼不是同一件事。
 
 C 程式碼不是直接被電腦當成文字執行。使用 `Build` 時，GCC 編譯器（compiler）處理原始碼，產生可執行檔；`Run` 將執行程式並收集輸出。如果工具鏈尚未設定，仍可閱讀課文，但應先到 `Settings` 明確選擇可用 GCC 才能執行。
 

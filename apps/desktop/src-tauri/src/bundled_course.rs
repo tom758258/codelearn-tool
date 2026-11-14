@@ -38,10 +38,7 @@ pub fn ensure_builtin_course(workspace: &Workspace) -> Result<Library> {
         .map_err(|e| format!("Cannot prepare bundled course: {e}"))?;
     for (name, bytes) in BUNDLED_COURSE_FILES {
         let relative = Path::new(name);
-        if !relative
-            .components()
-            .all(|part| matches!(part, Component::Normal(_)))
-        {
+        if !relative.components().all(|part| matches!(part, Component::Normal(_))) {
             return Err("Invalid path in bundled course".into());
         }
         let destination = staging.path().join(relative);
