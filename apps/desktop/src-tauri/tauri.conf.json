@@ -14,11 +14,12 @@
     "windows": [
       {
         "title": "CodeLearn Tool",
-        "width": 800,
-        "height": 560,
+        "width": 1920,
+        "height": 1080,
         "minWidth": 360,
         "minHeight": 360,
-        "center": true
+        "center": true,
+        "preventOverflow": true
       }
     ],
     "security": {
